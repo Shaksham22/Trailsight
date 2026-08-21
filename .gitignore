@@ -1,0 +1,26 @@
+/external/TransXion/
+/TransXion/
+/external/
+/data/source/
+/data/raw/
+
+/data/runtime/*
+!/data/runtime/.gitkeep
+/data/traces/*
+!/data/traces/.gitkeep
+/eval_results/
+
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+
+# Local Python build and coverage artifacts
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/

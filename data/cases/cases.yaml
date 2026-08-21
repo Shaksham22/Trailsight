@@ -1,0 +1,17 @@
+cases:
+- case_ref: demo-01
+  display_name: Demo 01
+  selected_transaction_ref: tsx_8919c222c8890260dc0ef159b7fc6f3f645c8f4e622e9e5c869783c6e8ad52cc
+  selection_kind: fixed_demo
+- case_ref: eval-amount-insufficient-01
+  display_name: Eval Amount Insufficient 01
+  selected_transaction_ref: tsx_cf018d6a68de5115435af51be2bec4cab7aeb2ad669f34a3c293b94a657bb14b
+  selection_kind: insufficient_amount_history
+- case_ref: eval-amount-limited-01
+  display_name: Eval Amount Limited 01
+  selected_transaction_ref: tsx_c49c03f0279acf28150b028392917a9179bee597320b78464be947f18d31d3ea
+  selection_kind: limited_amount_history
+- case_ref: eval-repeat-counterparty-01
+  display_name: Eval Repeat Counterparty 01
+  selected_transaction_ref: tsx_d2a07ecf49a80b81d1c85889d2fa235552b1d3b2635e192f56e2a7c889ae6a91
+  selection_kind: repeat_counterparty
