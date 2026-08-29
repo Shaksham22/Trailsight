@@ -24,3 +24,8 @@ build/
 dist/
 .coverage
 htmlcov/
+
+# Trailsight V2 external IBM source / generated runtime / offline evaluation artifacts
+/data/v2/source/
+/data/v2/runtime/
+/data/v2/offline-evaluation/

@@ -1,376 +1,370 @@
 import type {
-  ApplicationError,
-  CaseListResponse,
-  FollowUpRequest,
-  HistoricalTransactionRow,
+  AccountDetailResponse,
+  AccountIdentity,
+  AccountListItem,
+  AccountOrigin,
+  AccountQuery,
+  AlertListItem,
+  AlertQuery,
+  BankCountryRoutePoint,
+  CursorPage,
+  EvidenceDisplay,
+  InvestigationRequest,
   InvestigationResponse,
-  WorkspaceResponse,
-} from "./types";
+  ReviewBand,
+  ReviewWorkflowStatus,
+  SupportingTransactionRow,
+  TransactionDetailResponse,
+  TransactionListItem,
+  TransactionQuery,
+} from "./types.ts";
 
-const fixtureDelayMs = 120;
+const wait = () => new Promise((resolve) => setTimeout(resolve, 80));
+const snapshotId = "snap_2026_08_20";
+const cutoff = "2026-08-20T00:00:00";
 
-function fixtureRef(suffix: string): string {
-  return `tsx_${suffix.padStart(64, "0")}`;
-}
+const countryRoutePoints: Record<string, Omit<BankCountryRoutePoint, "bank_id">> = {
+  CA: { bank_country: "Canada", iso_alpha2: "CA", centroid_latitude: 56.1304, centroid_longitude: -106.3468 },
+  GB: { bank_country: "United Kingdom", iso_alpha2: "GB", centroid_latitude: 55.3781, centroid_longitude: -3.436 },
+  US: { bank_country: "United States", iso_alpha2: "US", centroid_latitude: 37.0902, centroid_longitude: -95.7129 },
+  SG: { bank_country: "Singapore", iso_alpha2: "SG", centroid_latitude: 1.3521, centroid_longitude: 103.8198 },
+};
 
-function historyRow(
-  suffix: string,
+const account = (accountRef: string, bankId: string, accountId: string, iso: keyof typeof countryRoutePoints): AccountIdentity => ({
+  account_ref: accountRef,
+  bank_id: bankId,
+  account_id: accountId,
+  bank_country: countryRoutePoints[iso].bank_country,
+});
+
+const bankRoutePoint = (identity: AccountIdentity): BankCountryRoutePoint => {
+  const metadata = Object.values(countryRoutePoints).find((country) => country.bank_country === identity.bank_country);
+  if (!metadata) throw new Error(`Fixture bank-country metadata missing for ${identity.bank_country}.`);
+  return { bank_id: identity.bank_id, ...metadata };
+};
+
+export const ACCOUNTS = {
+  sender: account("acct_sender000000000000001", "B105", "A016568", "CA"),
+  receiver: account("acct_receiver000000000001", "B220", "A013644", "GB"),
+  sameCountry: account("acct_samecountry000000001", "B310", "A010240", "CA"),
+  other: account("acct_other00000000000001", "B440", "A019330", "US"),
+  sg: account("acct_sg00000000000000001", "B550", "A011450", "SG"),
+};
+
+export const TXN_MAIN = `txn_${"a".repeat(64)}`;
+export const TXN_SAME_COUNTRY = `txn_${"b".repeat(64)}`;
+export const TXN_OTHER = `txn_${"c".repeat(64)}`;
+
+const transaction = (
+  transaction_ref: string,
   timestamp: string,
-  account: string,
-  type: "Person" | "Merchant",
-  amount: string,
-  currency: string,
-  receivingCurrency: string,
-  region: number,
-  format: string,
-): HistoricalTransactionRow {
-  return {
-    transaction_ref: fixtureRef(suffix),
-    timestamp,
-    counterparty_bank: "",
-    counterparty_account: account,
-    counterparty_type: type,
-    amount_paid: amount,
-    payment_currency: currency,
-    receiving_currency: receivingCurrency,
-    receiver_region: region,
-    payment_format: format,
-  };
-}
+  sender: AccountIdentity,
+  receiver: AccountIdentity,
+  amount_paid: string,
+  payment_currency: string,
+  amount_received: string,
+  receiving_currency: string,
+  payment_format: string,
+  aml_review_priority: TransactionListItem["aml_review_priority"],
+  related_alert: boolean,
+): TransactionListItem => ({
+  transaction_ref,
+  timestamp,
+  sender,
+  receiver,
+  amount_paid,
+  payment_currency,
+  amount_received,
+  receiving_currency,
+  payment_format,
+  aml_review_priority,
+  related_alert,
+});
 
-const demoHistory: HistoricalTransactionRow[] = [
-  historyRow("101", "2025-05-07T09:14:00.000000", "A019101", "Merchant", "58.20", "CNY", "CNY", 1, "ACH"),
-  historyRow("102", "2025-05-02T14:05:00.000000", "A018762", "Person", "71.00", "CNY", "CNY", 2, "Cash"),
-  historyRow("103", "2025-04-27T12:40:00.000000", "A014980", "Merchant", "46.75", "CNY", "USD", 0, "Card"),
-  historyRow("104", "2025-04-20T18:22:00.000000", "A015173", "Person", "83.10", "CNY", "CNY", 13, "Cash"),
-  historyRow("105", "2025-04-13T10:11:00.000000", "A017214", "Merchant", "62.40", "CNY", "USD", 14, "ACH"),
-  historyRow("106", "2025-04-05T08:58:00.000000", "A010326", "Person", "54.00", "CNY", "CNY", 6, "Cash"),
-  historyRow("107", "2025-03-28T16:31:00.000000", "A011337", "Person", "75.60", "CNY", "CNY", 17, "Cash"),
-  historyRow("108", "2025-03-21T11:09:00.000000", "A014588", "Merchant", "38.90", "CNY", "CNY", 8, "Card"),
-  historyRow("109", "2025-03-13T13:47:00.000000", "A019149", "Merchant", "91.20", "CNY", "USD", 9, "ACH"),
-  historyRow("10a", "2025-03-05T17:16:00.000000", "A016650", "Person", "67.80", "CNY", "CNY", 10, "Cash"),
-  historyRow("10b", "2025-02-26T09:29:00.000000", "A013231", "Merchant", "59.50", "CNY", "CNY", 11, "Card"),
-  historyRow("10c", "2025-02-18T15:03:00.000000", "A017432", "Person", "64.25", "CNY", "USD", 12, "Cash"),
-  historyRow("10d", "2025-02-11T10:51:00.000000", "A018013", "Merchant", "77.40", "CNY", "CNY", 13, "ACH"),
-  historyRow("10e", "2025-02-03T12:12:00.000000", "A011854", "Person", "43.80", "CNY", "CNY", 14, "Cash"),
-  historyRow("10f", "2025-01-26T19:33:00.000000", "A010895", "Person", "69.10", "CNY", "CNY", 15, "Cash"),
-  historyRow("110", "2025-01-19T07:45:00.000000", "A015516", "Merchant", "55.30", "CNY", "USD", 16, "Card"),
-  historyRow("111", "2025-01-11T14:27:00.000000", "A014937", "Person", "81.00", "CNY", "CNY", 17, "Cash"),
-  historyRow("112", "2025-01-04T09:39:00.000000", "A017478", "Merchant", "49.95", "CNY", "CNY", 18, "ACH"),
-  historyRow("113", "2024-12-27T16:54:00.000000", "A012899", "Person", "73.25", "CNY", "CNY", 19, "Cash"),
-  historyRow("114", "2024-12-18T11:20:00.000000", "A018520", "Merchant", "61.70", "CNY", "USD", 0, "Card"),
-  historyRow("115", "2024-12-11T08:10:00.000000", "A011341", "Person", "8.50", "USD", "USD", 1, "Cash"),
-  historyRow("116", "2024-12-03T13:44:00.000000", "A016902", "Merchant", "12.00", "USD", "USD", 2, "ACH"),
-  historyRow("117", "2024-11-24T17:38:00.000000", "A014343", "Person", "10.20", "USD", "USD", 3, "Cash"),
-  historyRow("118", "2024-11-15T10:02:00.000000", "A019824", "Merchant", "9.75", "USD", "USD", 4, "Card"),
+const transactions: TransactionListItem[] = [
+  transaction(TXN_MAIN, "2026-08-20T14:36:00", ACCOUNTS.sender, ACCOUNTS.receiver, "12840.00", "CAD", "6940.12", "GBP", "Wire", "HIGH", true),
+  transaction(TXN_SAME_COUNTRY, "2026-08-20T12:10:00", ACCOUNTS.sender, ACCOUNTS.sameCountry, "4200.00", "CAD", "4200.00", "CAD", "ACH", "MEDIUM", true),
+  transaction(TXN_OTHER, "2026-08-19T18:42:00", ACCOUNTS.other, ACCOUNTS.sender, "2100.00", "USD", "2861.14", "CAD", "Wire", "LOW", false),
+  transaction(`txn_${"d".repeat(64)}`, "2026-08-19T09:22:00", ACCOUNTS.sg, ACCOUNTS.receiver, "8450.00", "SGD", "4930.00", "GBP", "Card", "UNSCORED", false),
 ];
 
-const demoWorkspace: WorkspaceResponse = {
-  case_ref: "demo-01",
-  display_name: "Primary review",
-  selected_transaction: {
-    transaction_ref: fixtureRef("d001"),
-    timestamp: "2025-05-08T16:18:46.000000",
-    sender: {
-      bank: "",
-      account: "A016568",
-      entity_type: "Person",
-      synthetic_region: 8,
-    },
-    counterparty: {
-      bank: "",
-      account: "A013644",
-      entity_type: "Person",
-      synthetic_region: 4,
-    },
-    amount_paid: "69.54",
-    payment_currency: "CNY",
-    amount_received: "9.40",
-    receiving_currency: "USD",
-    payment_format: "Cash",
-    cross_currency: true,
-    currency_pair: "CNY → USD",
-    region_relationship: "cross_region",
-  },
-  sender_history: {
-    evidence_id: "ev:demo-01:sender-history",
-    prior_outgoing_count: 24,
-  },
-  amount_history: {
-    evidence_id: "ev:demo-01:amount-history",
-    history_quality: "sufficient",
-    sample_size: 20,
-    selected_amount: "69.54",
-    payment_currency: "CNY",
-    historical_median: "63.325",
-    empirical_percentile: 65,
-  },
-  counterparty_history: {
-    evidence_id: "ev:demo-01:counterparty-history",
-    seen_before: false,
-    previous_interaction_count: 0,
-    first_previous_timestamp: null,
-    most_recent_previous_timestamp: null,
-  },
-  region_history: {
-    evidence_id: "ev:demo-01:region-history",
-    sender_region: 8,
-    receiver_region: 4,
-    region_relationship: "cross_region",
-    receiver_region_seen_before: true,
-    previous_receiver_region_count: 1,
-  },
-  historical_transactions: demoHistory,
+const accountRows: AccountListItem[] = [
+  { ...ACCOUNTS.sender, network_review_band: "HIGH", network_pattern_score: "0.88421", latest_snapshot_id: snapshotId, latest_detector_cutoff: cutoff, incoming_count: 148, outgoing_count: 231, alert_involvement: true },
+  { ...ACCOUNTS.receiver, network_review_band: "MEDIUM", network_pattern_score: "0.61108", latest_snapshot_id: snapshotId, latest_detector_cutoff: cutoff, incoming_count: 202, outgoing_count: 91, alert_involvement: true },
+  { ...ACCOUNTS.sameCountry, network_review_band: "LOW", network_pattern_score: "0.18772", latest_snapshot_id: snapshotId, latest_detector_cutoff: cutoff, incoming_count: 31, outgoing_count: 44, alert_involvement: false },
+  { ...ACCOUNTS.other, network_review_band: "UNSCORED", network_pattern_score: null, latest_snapshot_id: snapshotId, latest_detector_cutoff: cutoff, incoming_count: 3, outgoing_count: 1, alert_involvement: false },
+];
+
+let alertStatuses: Record<string, ReviewWorkflowStatus> = {
+  "ALT-2026-000184": "NOT_REVIEWED",
+  "ALT-2026-000153": "IN_REVIEW",
+  "ALT-2026-000122": "REVIEWED",
 };
 
-const limitedWorkspace: WorkspaceResponse = {
-  ...demoWorkspace,
-  case_ref: "eval-amount-limited-01",
-  display_name: "Limited amount history",
-  selected_transaction: {
-    ...demoWorkspace.selected_transaction,
-    transaction_ref: fixtureRef("d002"),
-    timestamp: "2025-05-08T15:00:00.000000",
-    sender: { ...demoWorkspace.selected_transaction.sender, account: "A010008" },
-    counterparty: {
-      ...demoWorkspace.selected_transaction.counterparty,
-      account: "A017214",
-      synthetic_region: 14,
-    },
-    amount_paid: "52.00",
-    amount_received: "7.03",
-  },
-  sender_history: {
-    evidence_id: "ev:eval-amount-limited-01:sender-history",
-    prior_outgoing_count: 7,
-  },
-  amount_history: {
-    evidence_id: "ev:eval-amount-limited-01:amount-history",
-    history_quality: "limited",
-    sample_size: 7,
-    selected_amount: "52.00",
-    payment_currency: "CNY",
-    historical_median: "58.20",
-    empirical_percentile: null,
-  },
-  counterparty_history: {
-    evidence_id: "ev:eval-amount-limited-01:counterparty-history",
-    seen_before: true,
-    previous_interaction_count: 1,
-    first_previous_timestamp: "2025-04-13T10:11:00.000000",
-    most_recent_previous_timestamp: "2025-04-13T10:11:00.000000",
-  },
-  region_history: null,
-  historical_transactions: demoHistory.slice(0, 7),
+const baseAlerts: Omit<AlertListItem, "review_status">[] = [
+  { alert_ref: "ALT-2026-000184", ...ACCOUNTS.sender, network_review_band: "HIGH" as const, entry_snapshot_id: snapshotId, entry_cutoff: cutoff, primary_reason: "ENTERED_HIGH", relevant_recent_transaction_count: 18 },
+  { alert_ref: "ALT-2026-000153", ...ACCOUNTS.receiver, network_review_band: "HIGH" as const, entry_snapshot_id: "snap_2026_08_18", entry_cutoff: "2026-08-18T00:00:00", primary_reason: "RE-ENTERED_HIGH", relevant_recent_transaction_count: 9 },
+  { alert_ref: "ALT-2026-000122", ...ACCOUNTS.other, network_review_band: "HIGH" as const, entry_snapshot_id: "snap_2026_08_16", entry_cutoff: "2026-08-16T00:00:00", primary_reason: "ENTERED_HIGH", relevant_recent_transaction_count: 4 },
+].map(({ account_ref, bank_id, account_id, bank_country, ...rest }) => ({ account_ref, bank_id, account_id, bank_country, ...rest }));
+
+const evidenceIds = {
+  priority: "ev2.fixture.transaction-priority.1",
+  facts: "ev2.fixture.transaction-facts.2",
+  route: "ev2.fixture.bank-country-route.3",
+  network: "ev2.fixture.network-behavior.4",
+  activity: "ev2.fixture.account-activity.5",
+  relationship: "ev2.fixture.counterparty-relationship.6",
 };
 
-const insufficientWorkspace: WorkspaceResponse = {
-  ...demoWorkspace,
-  case_ref: "eval-amount-insufficient-01",
-  display_name: "Insufficient amount history",
-  selected_transaction: {
-    ...demoWorkspace.selected_transaction,
-    transaction_ref: fixtureRef("d003"),
-    timestamp: "2025-05-08T14:00:00.000000",
-    sender: {
-      ...demoWorkspace.selected_transaction.sender,
-      account: "A010009",
-      synthetic_region: 9,
-    },
-    counterparty: {
-      ...demoWorkspace.selected_transaction.counterparty,
-      account: "A010005",
-      synthetic_region: 5,
-    },
-    amount_paid: "40.00",
-    amount_received: "5.40",
-  },
-  sender_history: {
-    evidence_id: "ev:eval-amount-insufficient-01:sender-history",
-    prior_outgoing_count: 3,
-  },
-  amount_history: {
-    evidence_id: "ev:eval-amount-insufficient-01:amount-history",
-    history_quality: "insufficient",
-    sample_size: 3,
-    selected_amount: "40.00",
-    payment_currency: "CNY",
-    historical_median: null,
-    empirical_percentile: null,
-  },
-  counterparty_history: {
-    evidence_id: "ev:eval-amount-insufficient-01:counterparty-history",
-    seen_before: false,
-    previous_interaction_count: 0,
-    first_previous_timestamp: null,
-    most_recent_previous_timestamp: null,
-  },
-  region_history: null,
-  historical_transactions: demoHistory.slice(0, 3),
-};
+const supportingRows: SupportingTransactionRow[] = transactions.slice(1).map((row) => ({ ...row, relationship_to_subject: "Direct one-hop relationship" }));
 
-const workspaces: Record<string, WorkspaceResponse> = {
-  [demoWorkspace.case_ref]: demoWorkspace,
-  [limitedWorkspace.case_ref]: limitedWorkspace,
-  [insufficientWorkspace.case_ref]: insufficientWorkspace,
-};
-
-function waitForFixture(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, fixtureDelayMs));
-}
-
-function fixtureNotFound(): ApplicationError {
+function evidence(label: string, evidence_id: string, evidence_type: EvidenceDisplay["evidence_type"], ui_target: EvidenceDisplay["ui_target"], facts: EvidenceDisplay["facts"]): EvidenceDisplay {
   return {
-    code: "case_not_found",
-    message: "The selected Trailsight case was not found.",
+    label,
+    evidence_id,
+    evidence_type,
+    subject_type: ui_target === "account-network" || ui_target === "activity-context" ? "ACCOUNT" : "TRANSACTION",
+    subject_ref: ui_target === "account-network" || ui_target === "activity-context" ? ACCOUNTS.sender.account_ref : TXN_MAIN,
+    context_time: "2026-08-20T14:36:00",
+    snapshot_id: snapshotId,
+    detector_cutoff: cutoff,
+    facts,
+    ui_target,
+    supporting_transaction_count: supportingRows.length,
+    supporting_transactions: supportingRows,
+    support_truncated: false,
   };
 }
 
-export async function fixtureListCases(): Promise<CaseListResponse> {
-  await waitForFixture();
+const evidenceCatalog: EvidenceDisplay[] = [
+  evidence("E1", evidenceIds.priority, "TRANSACTION_PRIORITY", "review-priority", { priority: "HIGH", sender_band: "HIGH", receiver_band: "MEDIUM" }),
+  evidence("E2", evidenceIds.facts, "TRANSACTION_FACTS", "transaction-facts", { payment_format: "Wire", payment_currency: "CAD", receiving_currency: "GBP" }),
+  evidence("E3", evidenceIds.route, "BANK_COUNTRY_ROUTE", "bank-country-route", { sending_bank_country: "Canada", receiving_bank_country: "United Kingdom", same_bank_country: false }),
+  evidence("E4", evidenceIds.network, "NETWORK_BEHAVIOR", "account-network", { total_direct_counterparties: 31, shown_counterparties: 4, truncated: true }),
+  evidence("E5", evidenceIds.activity, "ACCOUNT_ACTIVITY", "activity-context", { prior_24h_count: 18, fan_out_24h: 7 }),
+  evidence("E6", evidenceIds.relationship, "COUNTERPARTY_RELATIONSHIP", "investigation-indicators", { seen_before: false, previous_interaction_count: 0 }),
+];
+
+const activityBuckets = [
+  { timestamp: "2026-08-14T00:00:00", currency: "CAD", incoming_amount: "8200", outgoing_amount: "11250", transaction_count: 9 },
+  { timestamp: "2026-08-15T00:00:00", currency: "CAD", incoming_amount: "9400", outgoing_amount: "6800", transaction_count: 7 },
+  { timestamp: "2026-08-16T00:00:00", currency: "CAD", incoming_amount: "4200", outgoing_amount: "15400", transaction_count: 11 },
+  { timestamp: "2026-08-17T00:00:00", currency: "CAD", incoming_amount: "10800", outgoing_amount: "12500", transaction_count: 10 },
+  { timestamp: "2026-08-18T00:00:00", currency: "CAD", incoming_amount: "5100", outgoing_amount: "18100", transaction_count: 14 },
+  { timestamp: "2026-08-19T00:00:00", currency: "CAD", incoming_amount: "2861.14", outgoing_amount: "8700", transaction_count: 12 },
+  { timestamp: "2026-08-20T00:00:00", currency: "CAD", incoming_amount: "4500", outgoing_amount: "12840", transaction_count: 18 },
+  { timestamp: "2026-08-18T00:00:00", currency: "USD", incoming_amount: "1500", outgoing_amount: "2400", transaction_count: 3 },
+  { timestamp: "2026-08-19T00:00:00", currency: "USD", incoming_amount: "2100", outgoing_amount: "0", transaction_count: 2 },
+  { timestamp: "2026-08-20T00:00:00", currency: "GBP", incoming_amount: "0", outgoing_amount: "6940.12", transaction_count: 1 },
+];
+
+function network(root: AccountIdentity, selectedCounterparty: AccountIdentity) {
+  const cps = [selectedCounterparty, ACCOUNTS.sameCountry, ACCOUNTS.other, ACCOUNTS.sg].filter((a) => a.account_ref !== root.account_ref);
   return {
-    cases: [
-      { case_ref: demoWorkspace.case_ref, display_name: demoWorkspace.display_name },
-      { case_ref: limitedWorkspace.case_ref, display_name: limitedWorkspace.display_name },
-      { case_ref: insufficientWorkspace.case_ref, display_name: insufficientWorkspace.display_name },
+    root,
+    counterparties: cps.map((cp) => ({ ...cp, is_root: false })),
+    relationships: cps.map((cp, index) => ({
+      counterparty_account_ref: cp.account_ref,
+      incoming_count: index + 2,
+      outgoing_count: (index + 1) * 3,
+      total_count: index + 2 + (index + 1) * 3,
+      first_historical_timestamp: `2026-07-${String(10 + index).padStart(2, "0")}T09:00:00`,
+      last_historical_timestamp: `2026-08-${String(15 + index).padStart(2, "0")}T18:20:00`,
+      selected_relationship: cp.account_ref === selectedCounterparty.account_ref,
+    })),
+    total_direct_counterparties: 31,
+    shown_counterparties: cps.length,
+    truncated: true,
+    selection_rule_version: "ego-one-hop-v1" as const,
+  };
+}
+
+function detailFor(tx: TransactionListItem): TransactionDetailResponse {
+  const same = tx.sender.bank_country === tx.receiver.bank_country;
+  const senderBand: ReviewBand = tx.transaction_ref === TXN_MAIN ? "HIGH" : tx.aml_review_priority;
+  const receiverBand: ReviewBand = tx.transaction_ref === TXN_MAIN ? "MEDIUM" : "LOW";
+  return {
+    review_state: {
+      aml_review_priority: tx.aml_review_priority,
+      sender_band: senderBand,
+      receiver_band: receiverBand,
+      applicable_snapshot_id: snapshotId,
+      detector_cutoff: cutoff,
+      derivation_text: tx.aml_review_priority === "HIGH"
+        ? "HIGH review priority because the sender was in the HIGH Network Review Band at the applicable historical detector snapshot."
+        : tx.aml_review_priority === "UNSCORED"
+          ? "Insufficient network context at the applicable historical detector snapshot."
+          : `${tx.aml_review_priority} review priority from the backend-returned endpoint-band matrix at the applicable historical detector snapshot.`,
+    },
+    transaction_facts: { ...tx, cross_currency: tx.payment_currency !== tx.receiving_currency, currency_pair: `${tx.payment_currency} → ${tx.receiving_currency}` },
+    bank_country_route: {
+      sending: bankRoutePoint(tx.sender),
+      receiving: bankRoutePoint(tx.receiver),
+      same_bank_country: same,
+      mapping_version: "bank-country-v1",
+    },
+    sender_account_card: { account: tx.sender, network_review_band: senderBand, detector_cutoff: cutoff, observed_summary: "18 transactions in the prior 24h; 7 distinct outgoing counterparties in the same bounded context." },
+    receiver_account_card: { account: tx.receiver, network_review_band: receiverBand, detector_cutoff: cutoff, observed_summary: "11 transactions in the prior 24h; 5 distinct incoming counterparties in the same bounded context." },
+    investigation_indicators: [
+      { key: "velocity", title: "Prior 24h activity", observed_text: "18 transactions before context time", detail: "Incoming and outgoing activity is counted in the fixed prior-24-hour window; this is an observed fact, not a threshold verdict.", evidence_id: evidenceIds.activity, ui_target: "investigation-indicators", supporting_transaction_refs: supportingRows.map((r) => r.transaction_ref) },
+      { key: "relationship", title: "Counterparty relationship", observed_text: "No prior interaction in the resolved context", detail: "The selected sender and receiver have no earlier transaction before this transaction timestamp in the bounded relationship evidence.", evidence_id: evidenceIds.relationship, ui_target: "investigation-indicators", supporting_transaction_refs: [] },
+      { key: "currency", title: "Currency route", observed_text: tx.payment_currency === tx.receiving_currency ? "Same-currency transfer" : `${tx.payment_currency} → ${tx.receiving_currency}`, detail: "Currency is displayed exactly as returned by deterministic transaction facts. No FX-rate or fee inference is made.", evidence_id: evidenceIds.facts, ui_target: "investigation-indicators", supporting_transaction_refs: [] },
     ],
+    activity_context: { range_start: "2026-08-14T00:00:00", range_end: tx.timestamp, buckets: activityBuckets, selected_transaction: { transaction_ref: tx.transaction_ref, timestamp: tx.timestamp, currency: tx.payment_currency, amount: tx.amount_paid } },
+    local_network_summary: { sender: network(tx.sender, tx.receiver), receiver: network(tx.receiver, tx.sender) },
+    supporting_evidence_summary: evidenceCatalog,
   };
 }
 
-export async function fixtureGetCase(
-  caseRef: string,
-): Promise<WorkspaceResponse> {
-  await waitForFixture();
-  const workspace = workspaces[caseRef];
-  if (!workspace) {
-    throw fixtureNotFound();
-  }
-  return workspace;
+function accountDetailFor(identity: AccountIdentity, origin: AccountOrigin = {}): AccountDetailResponse {
+  const historical = Boolean(origin.origin_alert_ref || origin.origin_transaction_ref);
+  const originAlert = origin.origin_alert_ref ? baseAlerts.find((alert) => alert.alert_ref === origin.origin_alert_ref) : undefined;
+  const resolvedCutoff = originAlert?.entry_cutoff ?? cutoff;
+  const resolvedSnapshot = originAlert?.entry_snapshot_id ?? snapshotId;
+  const contextTime = origin.origin_transaction_ref ? "2026-08-20T14:36:00" : originAlert?.entry_cutoff ?? "2026-08-21T00:00:00";
+  const latestBand: ReviewBand = identity.account_ref === ACCOUNTS.sender.account_ref ? "HIGH" : identity.account_ref === ACCOUNTS.receiver.account_ref ? "MEDIUM" : identity.account_ref === ACCOUNTS.sameCountry.account_ref ? "LOW" : "UNSCORED";
+  const band: ReviewBand = originAlert ? "HIGH" : latestBand;
+  const accountNetwork = network(identity, identity.account_ref === ACCOUNTS.sender.account_ref ? ACCOUNTS.receiver : ACCOUNTS.sender);
+  return {
+    account_identity: identity,
+    context: { context_time: contextTime, snapshot_id: resolvedSnapshot, detector_cutoff: resolvedCutoff, origin_alert_ref: origin.origin_alert_ref ?? null, origin_transaction_ref: origin.origin_transaction_ref ?? null },
+    network_review_state: {
+      network_review_band: band,
+      network_pattern_score: band === "UNSCORED" ? null : band === "HIGH" ? "0.88421" : band === "MEDIUM" ? "0.61108" : "0.18772",
+      rank: band === "UNSCORED" ? null : band === "HIGH" ? 42 : band === "MEDIUM" ? 3200 : 48000,
+      percentile: band === "UNSCORED" ? null : band === "HIGH" ? "99.84" : band === "MEDIUM" ? "96.41" : "58.20",
+      detector_version: "garg-undirected-basic-v1",
+      policy_version: "review-band-v1",
+      structural_explanation: historical ? "Historical detector state resolved from the selected origin. The band is review prioritization, not an AML verdict." : "Latest completed detector state. The band is review prioritization, not an AML verdict.",
+    },
+    observed_activity: { incoming_count: 148, outgoing_count: 231, distinct_counterparties: 31, recent_24h_count: 18 },
+    activity_over_time: { range_start: "2026-08-14T00:00:00", range_end: contextTime, buckets: activityBuckets, selected_transaction: origin.origin_transaction_ref ? { transaction_ref: origin.origin_transaction_ref, timestamp: contextTime, currency: "CAD", amount: "12840.00" } : null },
+    currency_activity: [
+      { currency: "CAD", incoming_count: 92, outgoing_count: 142, incoming_amount: "182410.14", outgoing_amount: "266441.00" },
+      { currency: "USD", incoming_count: 21, outgoing_count: 18, incoming_amount: "42210.00", outgoing_amount: "38410.25" },
+      { currency: "GBP", incoming_count: 9, outgoing_count: 11, incoming_amount: "15400.00", outgoing_amount: "22940.12" },
+    ],
+    bank_country_flows: [
+      { bank_country: "United Kingdom", incoming_transaction_count: 18, outgoing_transaction_count: 26, distinct_counterparties: 8, latest_interaction: "2026-08-20T14:36:00" },
+      { bank_country: "United States", incoming_transaction_count: 16, outgoing_transaction_count: 11, distinct_counterparties: 5, latest_interaction: "2026-08-19T18:42:00" },
+      { bank_country: "Singapore", incoming_transaction_count: 4, outgoing_transaction_count: 8, distinct_counterparties: 3, latest_interaction: "2026-08-18T10:10:00" },
+    ],
+    alert_history: baseAlerts.slice(0, 2).map((a) => ({ ...a, review_status: alertStatuses[a.alert_ref] })),
+    investigation_indicators: detailFor(transactions[0]).investigation_indicators,
+    account_network: accountNetwork,
+    transactions: { items: supportingRows, next_cursor: null, has_more: false },
+    counterparties: accountNetwork.relationships,
+  };
 }
 
-export async function fixtureInvestigateCase(
-  caseRef: string,
-): Promise<InvestigationResponse> {
-  await waitForFixture();
-  if (!workspaces[caseRef]) {
-    throw fixtureNotFound();
-  }
+function page<T>(items: T[], cursor?: string | null, limit = 50): CursorPage<T> {
+  const offset = cursor ? Number(atob(cursor)) || 0 : 0;
+  const sliced = items.slice(offset, offset + limit);
+  const nextOffset = offset + sliced.length;
+  return { items: sliced, next_cursor: nextOffset < items.length ? btoa(String(nextOffset)) : null, has_more: nextOffset < items.length };
+}
 
-  if (caseRef === "eval-amount-limited-01") {
-    return {
-      investigation_id: "fixture-investigation-limited",
-      case_ref: caseRef,
-      parent_investigation_id: null,
-      run_status: "unavailable",
-      findings: [],
-      limits: [
-        "Trailsight cannot determine stated transaction purpose because that information is unavailable.",
-      ],
-      evidence: [],
-    };
-  }
+export async function fixtureListAlerts(query: AlertQuery): Promise<CursorPage<AlertListItem>> {
+  await wait();
+  let items = baseAlerts.map((a) => ({ ...a, review_status: alertStatuses[a.alert_ref] }));
+  if (query.review_status) items = items.filter((a) => a.review_status === query.review_status);
+  if (query.bank_country) items = items.filter((a) => a.bank_country === query.bank_country);
+  return page(items, query.cursor, query.limit);
+}
 
-  if (caseRef === "eval-amount-insufficient-01") {
-    return {
-      investigation_id: "fixture-investigation-error",
-      case_ref: caseRef,
-      parent_investigation_id: null,
-      run_status: "model_error",
-      findings: [],
-      limits: [],
-      evidence: [],
-    };
-  }
+export async function fixtureUpdateAlertReviewStatus(alertRef: string, reviewStatus: ReviewWorkflowStatus) {
+  await wait();
+  if (!baseAlerts.some((a) => a.alert_ref === alertRef)) throw { code: "NOT_FOUND", message: "Alert not found.", status: 404 };
+  alertStatuses = { ...alertStatuses, [alertRef]: reviewStatus };
+  return { alert_ref: alertRef, review_status: reviewStatus, updated_at: "2026-08-26T17:20:00-04:00" };
+}
 
+export async function fixtureListTransactions(query: TransactionQuery): Promise<CursorPage<TransactionListItem>> {
+  await wait();
+  let items = [...transactions];
+  const q = query.q?.trim().toLowerCase();
+  if (q) items = items.filter((t) => [t.transaction_ref, t.sender.account_id, t.sender.bank_id, t.receiver.account_id, t.receiver.bank_id].some((v) => v.toLowerCase().startsWith(q)));
+  if (query.priority) items = items.filter((t) => t.aml_review_priority === query.priority);
+  if (query.alert_involvement) items = items.filter((t) => String(t.related_alert) === query.alert_involvement);
+  if (query.currency) items = items.filter((t) => t.payment_currency === query.currency || t.receiving_currency === query.currency);
+  if (query.payment_format) items = items.filter((t) => t.payment_format === query.payment_format);
+  if (query.sending_bank_country) items = items.filter((t) => t.sender.bank_country === query.sending_bank_country);
+  if (query.receiving_bank_country) items = items.filter((t) => t.receiver.bank_country === query.receiving_bank_country);
+  if (query.date_from) items = items.filter((t) => t.timestamp >= query.date_from!);
+  if (query.date_to) items = items.filter((t) => t.timestamp < query.date_to!);
+  return page(items, query.cursor, query.limit);
+}
+
+export async function fixtureGetTransactionDetail(transactionRef: string): Promise<TransactionDetailResponse> {
+  await wait();
+  const tx = transactions.find((t) => t.transaction_ref === transactionRef);
+  if (!tx) throw { code: "NOT_FOUND", message: "Transaction not found.", status: 404 };
+  return detailFor(tx);
+}
+
+export async function fixtureListAccounts(query: AccountQuery): Promise<CursorPage<AccountListItem>> {
+  await wait();
+  let items = [...accountRows];
+  const q = query.q?.trim().toLowerCase();
+  if (q) items = items.filter((a) => a.account_id.toLowerCase().startsWith(q) || a.bank_id.toLowerCase().startsWith(q));
+  if (query.band) items = items.filter((a) => a.network_review_band === query.band);
+  if (query.bank_country) items = items.filter((a) => a.bank_country === query.bank_country);
+  if (query.alert_involvement) items = items.filter((a) => String(a.alert_involvement) === query.alert_involvement);
+  return page(items, query.cursor, query.limit);
+}
+
+export async function fixtureGetAccountDetail(accountRef: string, origin: AccountOrigin = {}): Promise<AccountDetailResponse> {
+  await wait();
+  if (origin.origin_alert_ref && origin.origin_transaction_ref) throw { code: "INVALID_CONTEXT", message: "Only one origin reference may be supplied.", status: 400 };
+  const identity = Object.values(ACCOUNTS).find((a) => a.account_ref === accountRef);
+  if (!identity) throw { code: "NOT_FOUND", message: "Account not found.", status: 404 };
+  return accountDetailFor(identity, origin);
+}
+
+export async function fixtureGetEvidence(evidenceId: string): Promise<EvidenceDisplay> {
+  await wait();
+  const item = evidenceCatalog.find((e) => e.evidence_id === evidenceId);
+  if (!item) throw { code: "NOT_FOUND", message: "Evidence not found.", status: 404 };
+  return item;
+}
+
+export async function fixtureStartInvestigation(body: InvestigationRequest): Promise<InvestigationResponse> {
+  await wait();
   return {
-    investigation_id: "fixture-investigation-demo",
-    case_ref: caseRef,
-    parent_investigation_id: null,
-    run_status: "success",
+    investigation_id: `inv_fixture_${body.subject_type.toLowerCase()}`,
+    run_status: "SUCCESS",
+    subject_type: body.subject_type,
+    subject_ref: body.subject_ref,
+    context: { context_time: body.origin_transaction_ref ? "2026-08-20T14:36:00" : cutoff, snapshot_id: snapshotId, detector_cutoff: cutoff, origin_alert_ref: body.origin_alert_ref, origin_transaction_ref: body.origin_transaction_ref },
     findings: [
-      {
-        text: "The selected CNY amount sits at the backend-reported 65th percentile of prior same-currency activity.",
-        citations: [{ label: "E1", evidence_id: "ev:demo-01:amount-history" }],
-      },
-      {
-        text: "The selected counterparty does not appear in the sender's prior outgoing history.",
-        citations: [{ label: "E2", evidence_id: "ev:demo-01:counterparty-history" }],
-      },
-      {
-        text: "The selected payment is cross-currency and crosses Synthetic Regions 8 to 4.",
-        citations: [{ label: "E3", evidence_id: "ev:demo-01:selected" }],
-      },
+      { category: "DETECTOR_OUTPUT", text: "The applicable account state is in the HIGH Network Review Band for this historical detector snapshot.", evidence_ids: [evidenceIds.priority] },
+      { category: "OBSERVED_FACT", text: "The bounded prior-24-hour context contains 18 transactions for the selected account.", evidence_ids: [evidenceIds.activity] },
+      { category: "INTERPRETATION", text: "The combination of elevated network-review state and recent activity may deserve closer analyst inspection; it does not establish laundering.", evidence_ids: [evidenceIds.priority, evidenceIds.activity] },
     ],
-    limits: [
-      "Stated transaction purpose is unavailable, so intent cannot be assessed.",
-    ],
-    evidence: [
-      {
-        label: "E1",
-        evidence_id: "ev:demo-01:amount-history",
-        evidence_type: "amount_history",
-        ui_target: "amount_context",
-        supporting_transaction_refs: [
-          demoHistory[0].transaction_ref,
-          demoHistory[1].transaction_ref,
-          demoHistory[2].transaction_ref,
-        ],
-      },
-      {
-        label: "E2",
-        evidence_id: "ev:demo-01:counterparty-history",
-        evidence_type: "counterparty_history",
-        ui_target: "counterparty_history",
-        supporting_transaction_refs: [],
-      },
-      {
-        label: "E3",
-        evidence_id: "ev:demo-01:selected",
-        evidence_type: "selected_transaction",
-        ui_target: "selected_transaction",
-        supporting_transaction_refs: [],
-      },
-    ],
+    limits: ["Trailsight does not know the true laundering outcome and does not infer customer intent."],
+    display_evidence: evidenceCatalog,
   };
 }
 
-export async function fixtureSubmitFollowUp(
-  caseRef: string,
-  request: FollowUpRequest,
-): Promise<InvestigationResponse> {
-  await waitForFixture();
-  const workspace = workspaces[caseRef];
-  if (!workspace) {
-    throw fixtureNotFound();
-  }
-
+let followUpUsed = new Set<string>();
+export async function fixtureSubmitFollowUp(investigationId: string, question: string): Promise<InvestigationResponse> {
+  await wait();
+  if (question.trim().length < 1 || question.trim().length > 500) throw { code: "INVALID_INPUT", message: "Follow-up must contain 1–500 characters.", status: 400 };
+  if (followUpUsed.has(investigationId)) throw { code: "FOLLOW_UP_ALREADY_USED", message: "Follow-up already used.", status: 409 };
+  followUpUsed.add(investigationId);
   return {
-    investigation_id: `fixture-follow-up-${caseRef}`,
-    case_ref: caseRef,
-    parent_investigation_id: request.parent_investigation_id,
-    run_status: "success",
-    findings: [
-      {
-        text: `Available sender history contains ${workspace.sender_history.prior_outgoing_count} prior outgoing transactions.`,
-        citations: [
-          { label: "E1", evidence_id: workspace.sender_history.evidence_id },
-        ],
-      },
-    ],
-    limits: [
-      "The answer is limited to the selected case's permitted past-only history.",
-    ],
-    evidence: [
-      {
-        label: "E1",
-        evidence_id: workspace.sender_history.evidence_id,
-        evidence_type: "sender_history",
-        ui_target: "sender_history",
-        supporting_transaction_refs:
-          workspace.historical_transactions.length > 0
-            ? [workspace.historical_transactions[0].transaction_ref]
-            : [],
-      },
-    ],
+    investigation_id: investigationId,
+    run_status: "SUCCESS",
+    subject_type: "TRANSACTION",
+    subject_ref: TXN_MAIN,
+    context: { context_time: "2026-08-20T14:36:00", snapshot_id: snapshotId, detector_cutoff: cutoff },
+    findings: [{ category: "OBSERVED_FACT", text: "The selected sender and receiver have no earlier interaction in the resolved historical context.", evidence_ids: [evidenceIds.relationship] }],
+    limits: ["This response remains bounded to the same subject and context."],
+    display_evidence: evidenceCatalog,
   };
+}
+
+export function resetFixtureState() {
+  followUpUsed = new Set<string>();
+  alertStatuses = { "ALT-2026-000184": "NOT_REVIEWED", "ALT-2026-000153": "IN_REVIEW", "ALT-2026-000122": "REVIEWED" };
 }
