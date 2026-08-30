@@ -226,7 +226,7 @@ export function ActivityTimeline({ activity }: { activity: ActivityContext }) {
   const buckets = useMemo(() => activityBucketsForCurrency(activity, currency), [activity, currency]);
   const option = useMemo<echarts.EChartsCoreOption>(() => ({
     animation: false, grid: { left: 64, right: 58, top: 28, bottom: 52 }, tooltip: { trigger: "axis", backgroundColor: "#0A1624", borderColor: "#2A4A62", textStyle: { color: "#F3F7FA" } }, legend: { top: 0, textStyle: { color: "#B9C7D3" }, data: ["Incoming amount", "Outgoing amount", "Transaction count"] },
-    xAxis: { type: "category", data: buckets.map((bucket) => bucket.timestamp), axisLabel: { color: "#7F94A6", formatter: (value: string) => value.slice(5, 16).replace("T", " ") }, axisLine: { lineStyle: { color: "#294156" } } },
+    xAxis: { type: "category", data: buckets.map(activityBucketAxisValue), axisLabel: { color: "#7F94A6", formatter: (value: string) => value.slice(5, 24).replace("T", " ").replace("|", " · ") }, axisLine: { lineStyle: { color: "#294156" } } },
     yAxis: [{ type: "value", name: currency ? `Amount · ${currency}` : "Amount", nameTextStyle: { color: "#7F94A6" }, axisLabel: { color: "#7F94A6" }, splitLine: { lineStyle: { color: "#1C3448" } } }, { type: "value", name: "Count", nameTextStyle: { color: "#7F94A6" }, axisLabel: { color: "#7F94A6" }, splitLine: { show: false } }],
     series: [
       { name: "Incoming amount", type: "line", symbolSize: 5, data: buckets.map((bucket) => Number(bucket.incoming_amount)), lineStyle: { color: "#55C7E8" }, itemStyle: { color: "#55C7E8" } },
@@ -243,6 +243,8 @@ export function CompactBars({ rows, ariaLabel }: { rows: Array<{ label: string; 
   const ref = useChart(option);
   return <div className="visual-block"><div ref={ref} className="chart chart--compact" role="img" aria-label={ariaLabel} /><p className="visual-helper">{rows.map((row) => `${row.label}: ${row.incoming} incoming, ${row.outgoing} outgoing`).join(" · ")}</p></div>;
 }
+
+function activityBucketAxisValue(bucket: ActivityContext["buckets"][number]) { return bucket.direction ? `${bucket.timestamp}|${bucket.direction === "INCOMING" ? "IN" : "OUT"}` : bucket.timestamp; }
 
 function shortAccount(value: string) { return value.length > 9 ? `${value.slice(0, 6)}…` : value; }
 

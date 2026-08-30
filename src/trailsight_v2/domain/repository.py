@@ -588,20 +588,33 @@ class DuckDBInvestigationRepositoryV2:
             raise DataIntegrityError("Evidence support refers to a missing transaction")
         return [by_ref[ref] for ref in bounded]
 
-    def activity_bucket_rows(self, account_ref: str, context_time: datetime) -> list[tuple[Any, ...]]:
+    def activity_bucket_rows(
+        self,
+        account_ref: str,
+        context_time: datetime,
+        *,
+        range_start: datetime | None = None,
+    ) -> list[tuple[Any, ...]]:
+        range_predicate = "AND transaction_timestamp >= ?" if range_start is not None else ""
+        params: list[Any] = [account_ref, account_ref, account_ref, context_time]
+        if range_start is not None:
+            params.append(range_start)
+        params.extend([account_ref, account_ref])
         return self._fetchall(
-            """
+            f"""
             SELECT CAST(transaction_timestamp AS DATE) AS day,
                    CASE WHEN to_account_ref = ? THEN 'INCOMING' ELSE 'OUTGOING' END AS direction,
                    CASE WHEN to_account_ref = ? THEN receiving_currency ELSE payment_currency END AS currency,
                    COUNT(*)::BIGINT,
                    SUM(CASE WHEN to_account_ref = ? THEN amount_received ELSE amount_paid END) AS total_amount
             FROM transactions
-            WHERE transaction_timestamp < ? AND (from_account_ref = ? OR to_account_ref = ?)
+            WHERE transaction_timestamp < ?
+              {range_predicate}
+              AND (from_account_ref = ? OR to_account_ref = ?)
             GROUP BY day, direction, currency
             ORDER BY day ASC, direction ASC, currency ASC
             """,
-            [account_ref, account_ref, account_ref, context_time, account_ref, account_ref],
+            params,
         )
 
     def bank_country_flow_rows(self, account_ref: str, context_time: datetime) -> list[tuple[Any, ...]]:

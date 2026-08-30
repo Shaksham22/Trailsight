@@ -10,7 +10,7 @@ export interface EvidenceFocus {
 export function evidenceFocusFromDisplay(evidence: EvidenceDisplay): EvidenceFocus {
   return {
     evidenceId: evidence.evidence_id,
-    label: evidence.label,
+    label: evidence.label ?? "Resolved evidence",
     uiTarget: evidence.ui_target,
     supportingTransactionRefs: evidence.supporting_transactions.map((row) => row.transaction_ref),
   };

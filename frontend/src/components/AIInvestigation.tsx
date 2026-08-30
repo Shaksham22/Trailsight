@@ -43,6 +43,8 @@ export function AIInvestigation(props: AIInvestigationProps) {
       const result = await startInvestigation({ subject_type, subject_ref, origin_alert_ref, origin_transaction_ref });
       setResponse(result);
       setStatus(result.run_status);
+      setFollowUpUsed(false);
+      setFollowUpError(null);
     } catch (caught) {
       const appError = caught as ApplicationError;
       if (appError.code === "AI_UNAVAILABLE") setStatus("UNAVAILABLE");
@@ -120,7 +122,7 @@ export function AIInvestigation(props: AIInvestigationProps) {
                     const display = displayById.get(evidenceId);
                     return (
                       <button key={evidenceId} className={`citation ${activeEvidenceId === evidenceId ? "is-active" : ""}`} aria-pressed={activeEvidenceId === evidenceId} onClick={() => focusEvidence(evidenceId)}>
-                        [{display?.label ?? "Evidence"}]
+                        [{display?.label ?? "Resolved evidence"}]
                       </button>
                     );
                   })}
@@ -150,7 +152,7 @@ export function EvidenceFocusState({ evidence }: { evidence: EvidenceDisplay | n
   );
   return (
     <aside className="evidence-preview" aria-live="polite">
-      <div className="evidence-preview__header"><span className="evidence-marker">Evidence {evidence.label}</span><code>{evidence.evidence_type}</code></div>
+      <div className="evidence-preview__header"><span className="evidence-marker">{evidence.label ? `Evidence ${evidence.label}` : "Resolved evidence"}</span><code>{evidence.evidence_type}</code></div>
       <dl>
         <div><dt>Subject</dt><dd><code>{evidence.subject_ref}</code></dd></div>
         <div><dt>Context</dt><dd>{evidence.context_time}</dd></div>

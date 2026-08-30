@@ -2,7 +2,7 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import type { AccountIdentity, ReviewBand, ReviewWorkflowStatus } from "../api/types";
 import { APP_ROUTES } from "../lib/routes";
-import { REVIEW_STATUSES, reviewBandLabel, workflowLabel } from "../lib/workflow";
+import { REVIEW_STATUSES, allowedReviewStatuses, reviewBandLabel, workflowLabel } from "../lib/workflow";
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -123,7 +123,7 @@ export function ReviewWorkflowStatus({ value, onChange, saving = false, error }:
   return (
     <div className="workflow-control" onClick={(event) => event.stopPropagation()}>
       <select aria-label="Review workflow status" value={value} disabled={saving} onChange={(event) => onChange(event.target.value as ReviewWorkflowStatus)}>
-        {REVIEW_STATUSES.map((status) => <option key={status} value={status}>{workflowLabel(status)}</option>)}
+        {REVIEW_STATUSES.map((status) => <option key={status} value={status} disabled={!allowedReviewStatuses(value).includes(status)}>{workflowLabel(status)}</option>)}
       </select>
       {saving && <span className="saving-text">Saving…</span>}
       {error && <span className="inline-error-text">{error}</span>}

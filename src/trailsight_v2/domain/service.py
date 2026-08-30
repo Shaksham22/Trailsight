@@ -27,6 +27,7 @@ from trailsight_v2.domain.models import (
     AccountNetworkV2,
     AccountTransactionPageV2,
     ActivityBucketV2,
+    ActivityContextV2,
     AlertContextFactsV2,
     AlertContextV2,
     AlertListItemV2,
@@ -41,25 +42,32 @@ from trailsight_v2.domain.models import (
     BehavioralIndicatorsV2,
     ContextIdentityV2,
     ContextKind,
+    CurrencyActivityV2,
     CurrencyBehaviorV2,
     DetectorSnapshotV2,
     DetectorStateEvidenceFactsV2,
     DetectorSupportV2,
     Direction,
     DisplayEvidenceV2,
+    EndpointAccountCardV2,
     EvidenceIdentityV2,
     EvidenceType,
     EvidenceV2,
     HistoryQuality,
     InvestigationContextV2,
+    InvestigationIndicatorV2,
+    LocalNetworkSummaryV2,
     NetworkBehaviorV2,
     NetworkRelationshipV2,
     NetworkReviewBand,
     RelationshipContextV2,
     RuntimeMetadataV2,
+    SelectedTransactionMarkerV2,
     SubjectType,
+    SupportingEvidenceSummaryItemV2,
     SupportingTransactionV2,
     SupportingTransactionsFactsV2,
+    TransactionActivityBucketV2,
     TransactionDetailV2,
     TransactionFactsV2,
     TransactionListItemV2,
@@ -76,6 +84,7 @@ from trailsight_v2.domain.repository import DuckDBInvestigationRepositoryV2
 SUPPORT_LIMIT = 50
 NETWORK_LIMIT = 24
 MAX_LIST_QUERY_TEXT = 256
+TRANSACTION_ACTIVITY_DAYS = 30
 
 
 
@@ -337,11 +346,44 @@ class InvestigationServiceV2:
                 {},
             ),
         ]
+        sender_card = self._endpoint_account_card(
+            facts.sender, context, Direction.OUTGOING
+        )
+        receiver_card = self._endpoint_account_card(
+            facts.receiver, context, Direction.INCOMING
+        )
+        investigation_indicators = self._transaction_investigation_indicators(indicators)
+        activity_context = self._transaction_activity_context(facts, context)
+        local_network_summary = LocalNetworkSummaryV2(
+            sender=self.get_account_network(facts.sender.account_ref, context=context),
+            receiver=self.get_account_network(facts.receiver.account_ref, context=context),
+        )
+        summary_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for evidence_id in [
+            *(item.evidence_id for item in evidences),
+            *(item.evidence_id for item in investigation_indicators),
+        ]:
+            if evidence_id not in seen_ids:
+                summary_ids.append(evidence_id)
+                seen_ids.add(evidence_id)
+        supporting_evidence_summary = tuple(
+            self._supporting_evidence_summary_item(
+                self.display_evidence(evidence_id), f"E{index}"
+            )
+            for index, evidence_id in enumerate(summary_ids, 1)
+        )
         return TransactionDetailV2(
             context=context,
             transaction_facts=facts,
             review_state=review,
             bank_country_route=route,
+            sender_account_card=sender_card,
+            receiver_account_card=receiver_card,
+            investigation_indicators=investigation_indicators,
+            activity_context=activity_context,
+            local_network_summary=local_network_summary,
+            supporting_evidence_summary=supporting_evidence_summary,
             indicators=indicators,
             evidence_ids=tuple(item.evidence_id for item in evidences),
         )
@@ -355,6 +397,7 @@ class InvestigationServiceV2:
         support = self._detector_support(context.detector_snapshot_id, account_ref)
         activity = self._account_activity(account_ref, context)
         activity_over_time = tuple(self._activity_buckets(account_ref, context))
+        currency_activity = self._currency_activity(activity_over_time)
         flows = tuple(self._bank_country_flows(account_ref, context))
         history = tuple(self._alert_history(account_ref, context))
         evidence_ids = (
@@ -387,6 +430,7 @@ class InvestigationServiceV2:
             detector_support=support,
             observed_activity=activity,
             activity_over_time=activity_over_time,
+            currency_activity=currency_activity,
             bank_country_flows=flows,
             alert_history=history,
             evidence_ids=evidence_ids,
@@ -990,11 +1034,307 @@ class InvestigationServiceV2:
             mapping_version=sender.mapping_version,
         )
 
+    def _endpoint_account_card(
+        self,
+        account: AccountIdentityV2,
+        context: InvestigationContextV2,
+        primary_direction: Direction,
+    ) -> EndpointAccountCardV2:
+        if context.detector_snapshot_id is None or context.detector_cutoff is None:
+            raise DataIntegrityError("Transaction context has no applicable detector snapshot")
+        state = self._account_detector_state(context.detector_snapshot_id, account.account_ref)
+        behavior = self._network_behavior(account.account_ref, context)
+        if primary_direction is Direction.OUTGOING:
+            counterparty_count = behavior.fan_out_24h
+            direction_text = "outgoing"
+        elif primary_direction is Direction.INCOMING:
+            counterparty_count = behavior.fan_in_24h
+            direction_text = "incoming"
+        else:
+            raise InvalidInputError("Endpoint account card direction must be incoming or outgoing")
+        summary = (
+            f"{behavior.velocity_24h.total_count} transactions in the prior 24h; "
+            f"{counterparty_count} distinct {direction_text} counterparties in the same bounded context."
+        )
+        return EndpointAccountCardV2(
+            account=account,
+            network_review_band=state.network_review_band,
+            detector_cutoff=context.detector_cutoff,
+            observed_summary=summary,
+        )
+
+    def _transaction_investigation_indicators(
+        self, indicators: BehavioralIndicatorsV2
+    ) -> tuple[InvestigationIndicatorV2, ...]:
+        resolved: dict[tuple[EvidenceType, str, str], EvidenceV2] = {}
+        for evidence_id in indicators.evidence_ids:
+            evidence = self.resolve_evidence(evidence_id)
+            side = str(evidence.parameters.get("side", ""))
+            resolved[(evidence.evidence_type, evidence.subject_ref, side)] = evidence
+
+        def require_evidence(
+            evidence_type: EvidenceType, subject_ref: str, side: str = ""
+        ) -> EvidenceV2:
+            try:
+                return resolved[(evidence_type, subject_ref, side)]
+            except KeyError as exc:
+                raise DataIntegrityError(
+                    "Behavioral indicator is missing its application-issued Evidence V2"
+                ) from exc
+
+        result: list[InvestigationIndicatorV2] = []
+
+        def add_amount(
+            *, key: str, title: str, facts: AmountBehaviorV2, evidence: EvidenceV2
+        ) -> None:
+            if facts.sample_size == 0:
+                observed = (
+                    f"No earlier {facts.currency} transactions matched this account, "
+                    f"direction, and amount-comparison side."
+                )
+            elif facts.historical_median is None:
+                observed = (
+                    f"{facts.selected_amount} {facts.currency} with "
+                    f"{facts.sample_size} earlier comparable transactions."
+                )
+            elif facts.empirical_percentile is None:
+                observed = (
+                    f"{facts.selected_amount} {facts.currency}; earlier median "
+                    f"{facts.historical_median} {facts.currency}."
+                )
+            else:
+                observed = (
+                    f"{facts.selected_amount} {facts.currency}; earlier median "
+                    f"{facts.historical_median} {facts.currency}; empirical percentile "
+                    f"{facts.empirical_percentile:.2f}."
+                )
+            detail = (
+                f"Comparison uses {facts.sample_size} strictly earlier transactions on the same "
+                f"currency and direction side. History quality: {facts.history_quality.value}."
+            )
+            result.append(
+                InvestigationIndicatorV2(
+                    key=key,
+                    title=title,
+                    observed_text=observed,
+                    detail=detail,
+                    evidence_id=evidence.evidence_id,
+                    ui_target=UITargetV2.INVESTIGATION_INDICATORS,
+                    supporting_transaction_refs=evidence.supporting_transaction_refs,
+                )
+            )
+
+        if indicators.sender_amount_behavior is not None:
+            facts = indicators.sender_amount_behavior
+            add_amount(
+                key="sender-amount-history",
+                title="Sender amount versus earlier history",
+                facts=facts,
+                evidence=require_evidence(
+                    EvidenceType.AMOUNT_BEHAVIOR,
+                    indicators.context.context_ref,
+                    AmountSide.SENDER_PAID.value,
+                ),
+            )
+        if indicators.receiver_amount_behavior is not None:
+            facts = indicators.receiver_amount_behavior
+            add_amount(
+                key="receiver-amount-history",
+                title="Receiver amount versus earlier history",
+                facts=facts,
+                evidence=require_evidence(
+                    EvidenceType.AMOUNT_BEHAVIOR,
+                    indicators.context.context_ref,
+                    AmountSide.RECEIVER_RECEIVED.value,
+                ),
+            )
+
+        if indicators.counterparty_relationship is not None:
+            facts = indicators.counterparty_relationship
+            evidence = require_evidence(
+                EvidenceType.COUNTERPARTY_RELATIONSHIP, facts.account_ref
+            )
+            observed = (
+                "No prior interaction before the selected transaction."
+                if facts.new_counterparty
+                else f"{facts.previous_interaction_count} prior interactions before the selected transaction."
+            )
+            detail = (
+                f"Earlier direction counts: {facts.root_to_counterparty_count} from sender to receiver "
+                f"and {facts.counterparty_to_root_count} from receiver to sender."
+            )
+            result.append(
+                InvestigationIndicatorV2(
+                    key="counterparty-relationship",
+                    title="Counterparty relationship",
+                    observed_text=observed,
+                    detail=detail,
+                    evidence_id=evidence.evidence_id,
+                    ui_target=UITargetV2.INVESTIGATION_INDICATORS,
+                    supporting_transaction_refs=evidence.supporting_transaction_refs,
+                )
+            )
+
+        for index, (account_ref, facts) in enumerate(
+            indicators.account_network_behavior.items()
+        ):
+            evidence = require_evidence(EvidenceType.NETWORK_BEHAVIOR, account_ref)
+            role = "Sender" if index == 0 else "Receiver"
+            result.append(
+                InvestigationIndicatorV2(
+                    key=f"{role.lower()}-recent-network",
+                    title=f"{role} recent velocity and fan",
+                    observed_text=(
+                        f"{facts.velocity_24h.total_count} prior transactions in 24h; "
+                        f"fan-in {facts.fan_in_24h}, fan-out {facts.fan_out_24h}."
+                    ),
+                    detail=(
+                        f"Prior 1h activity: {facts.velocity_1h.incoming_count} incoming and "
+                        f"{facts.velocity_1h.outgoing_count} outgoing transactions. "
+                        "All counts use the resolved historical cutoff."
+                    ),
+                    evidence_id=evidence.evidence_id,
+                    ui_target=UITargetV2.INVESTIGATION_INDICATORS,
+                    supporting_transaction_refs=evidence.supporting_transaction_refs,
+                )
+            )
+
+        if indicators.cross_currency is not None:
+            facts = indicators.cross_currency
+            evidence = require_evidence(
+                EvidenceType.CURRENCY_BEHAVIOR, facts.transaction_ref
+            )
+            observed = (
+                facts.currency_pair
+                if facts.cross_currency
+                else f"Same-currency transfer: {facts.currency_pair.split(' -> ')[0]}"
+            )
+            result.append(
+                InvestigationIndicatorV2(
+                    key="currency-route",
+                    title="Currency route",
+                    observed_text=observed,
+                    detail=(
+                        "Currency comparison is direct deterministic inequality only; "
+                        "no FX-rate, spread, fee, or geography inference is made."
+                    ),
+                    evidence_id=evidence.evidence_id,
+                    ui_target=UITargetV2.INVESTIGATION_INDICATORS,
+                    supporting_transaction_refs=evidence.supporting_transaction_refs,
+                )
+            )
+        return tuple(result)
+
+    def _transaction_activity_context(
+        self, facts: TransactionFactsV2, context: InvestigationContextV2
+    ) -> ActivityContextV2:
+        context_time = parse_canonical_timestamp(context.context_time)
+        range_start = context_time - timedelta(days=TRANSACTION_ACTIVITY_DAYS)
+        source = self._activity_buckets(
+            facts.sender.account_ref, context, range_start=range_start
+        )
+        combined: dict[tuple[str, str], dict[str, Any]] = {}
+        for bucket in source:
+            key = (bucket.day, bucket.currency)
+            item = combined.setdefault(
+                key,
+                {
+                    "incoming_amount": Decimal(0),
+                    "outgoing_amount": Decimal(0),
+                    "transaction_count": 0,
+                },
+            )
+            amount = Decimal(bucket.total_amount)
+            if bucket.direction is Direction.INCOMING:
+                item["incoming_amount"] += amount
+            else:
+                item["outgoing_amount"] += amount
+            item["transaction_count"] += bucket.transaction_count
+        buckets = tuple(
+            TransactionActivityBucketV2(
+                timestamp=f"{day}T00:00:00",
+                currency=currency,
+                incoming_amount=canonical_decimal(values["incoming_amount"]),
+                outgoing_amount=canonical_decimal(values["outgoing_amount"]),
+                transaction_count=int(values["transaction_count"]),
+            )
+            for (day, currency), values in sorted(combined.items())
+        )
+        return ActivityContextV2(
+            range_start=canonical_timestamp(range_start),
+            range_end=context.context_time,
+            buckets=buckets,
+            selected_transaction=SelectedTransactionMarkerV2(
+                transaction_ref=facts.transaction_ref,
+                timestamp=facts.transaction_timestamp,
+                currency=facts.payment_currency,
+                amount=facts.amount_paid,
+            ),
+        )
+
+    @staticmethod
+    def _currency_activity(
+        buckets: tuple[ActivityBucketV2, ...]
+    ) -> tuple[CurrencyActivityV2, ...]:
+        totals: dict[str, dict[str, Any]] = {}
+        for bucket in buckets:
+            item = totals.setdefault(
+                bucket.currency,
+                {
+                    "incoming_count": 0,
+                    "outgoing_count": 0,
+                    "incoming_amount": Decimal(0),
+                    "outgoing_amount": Decimal(0),
+                },
+            )
+            if bucket.direction is Direction.INCOMING:
+                item["incoming_count"] += bucket.transaction_count
+                item["incoming_amount"] += Decimal(bucket.total_amount)
+            else:
+                item["outgoing_count"] += bucket.transaction_count
+                item["outgoing_amount"] += Decimal(bucket.total_amount)
+        return tuple(
+            CurrencyActivityV2(
+                currency=currency,
+                incoming_count=int(values["incoming_count"]),
+                outgoing_count=int(values["outgoing_count"]),
+                incoming_amount=canonical_decimal(values["incoming_amount"]),
+                outgoing_amount=canonical_decimal(values["outgoing_amount"]),
+            )
+            for currency, values in sorted(totals.items())
+        )
+
+    @staticmethod
+    def _supporting_evidence_summary_item(
+        display: DisplayEvidenceV2, label: str
+    ) -> SupportingEvidenceSummaryItemV2:
+        return SupportingEvidenceSummaryItemV2(
+            label=label,
+            evidence_id=display.evidence_id,
+            evidence_type=display.evidence_type,
+            subject_type=display.subject_type,
+            subject_ref=display.subject_ref,
+            context_time=display.context_time,
+            snapshot_id=display.snapshot_id,
+            detector_cutoff=display.detector_cutoff,
+            facts=display.facts,
+            ui_target=display.ui_target,
+            supporting_transaction_count=display.supporting_transaction_count,
+            supporting_transactions=display.supporting_transactions,
+            support_truncated=display.support_truncated,
+        )
+
     def _activity_buckets(
-        self, account_ref: str, context: InvestigationContextV2
+        self,
+        account_ref: str,
+        context: InvestigationContextV2,
+        *,
+        range_start: datetime | None = None,
     ) -> list[ActivityBucketV2]:
         rows = self._repository.activity_bucket_rows(
-            account_ref, parse_canonical_timestamp(context.context_time)
+            account_ref,
+            parse_canonical_timestamp(context.context_time),
+            range_start=range_start,
         )
         return [
             ActivityBucketV2(

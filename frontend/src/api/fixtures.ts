@@ -4,11 +4,15 @@ import type {
   AccountListItem,
   AccountOrigin,
   AccountQuery,
+  AccountTransactionQuery,
+  AccountNetwork,
+  AlertDetailResponse,
   AlertListItem,
   AlertQuery,
   BankCountryRoutePoint,
   CursorPage,
   EvidenceDisplay,
+  HealthResponse,
   InvestigationRequest,
   InvestigationResponse,
   ReviewBand,
@@ -190,6 +194,7 @@ function detailFor(tx: TransactionListItem): TransactionDetailResponse {
       receiver_band: receiverBand,
       applicable_snapshot_id: snapshotId,
       detector_cutoff: cutoff,
+      alert_involvement: tx.related_alert,
       derivation_text: tx.aml_review_priority === "HIGH"
         ? "HIGH review priority because the sender was in the HIGH Network Review Band at the applicable historical detector snapshot."
         : tx.aml_review_priority === "UNSCORED"
@@ -212,7 +217,7 @@ function detailFor(tx: TransactionListItem): TransactionDetailResponse {
     ],
     activity_context: { range_start: "2026-08-14T00:00:00", range_end: tx.timestamp, buckets: activityBuckets, selected_transaction: { transaction_ref: tx.transaction_ref, timestamp: tx.timestamp, currency: tx.payment_currency, amount: tx.amount_paid } },
     local_network_summary: { sender: network(tx.sender, tx.receiver), receiver: network(tx.receiver, tx.sender) },
-    supporting_evidence_summary: evidenceCatalog,
+    supporting_evidence_summary: evidenceCatalog.map((item) => ({ ...item, label: item.label ?? "Resolved evidence", supporting_transactions: supportingRows })),
   };
 }
 
@@ -233,11 +238,26 @@ function accountDetailFor(identity: AccountIdentity, origin: AccountOrigin = {})
       network_pattern_score: band === "UNSCORED" ? null : band === "HIGH" ? "0.88421" : band === "MEDIUM" ? "0.61108" : "0.18772",
       rank: band === "UNSCORED" ? null : band === "HIGH" ? 42 : band === "MEDIUM" ? 3200 : 48000,
       percentile: band === "UNSCORED" ? null : band === "HIGH" ? "99.84" : band === "MEDIUM" ? "96.41" : "58.20",
-      detector_version: "garg-undirected-basic-v1",
-      policy_version: "review-band-v1",
-      structural_explanation: historical ? "Historical detector state resolved from the selected origin. The band is review prioritization, not an AML verdict." : "Latest completed detector state. The band is review prioritization, not an AML verdict.",
+      scoring_eligible: band !== "UNSCORED",
+      unscored_reason: band === "UNSCORED" ? "INSUFFICIENT_NETWORK_CONTEXT" : null,
     },
-    observed_activity: { incoming_count: 148, outgoing_count: 231, distinct_counterparties: 31, recent_24h_count: 18 },
+    detector_support: {
+      first_order_neighbor_count: 31,
+      second_order_neighbor_count: 112,
+      community_id_or_stable_snapshot_local_index: "fixture-community-7",
+      block_measure_1: "0.42",
+      block_measure_2: "0.31",
+      block_measure_3: "0.27",
+    },
+    observed_activity: {
+      incoming_count: 148,
+      outgoing_count: 231,
+      distinct_counterparties: 31,
+      incoming_distinct_counterparties: 19,
+      outgoing_distinct_counterparties: 24,
+      first_observed_timestamp: "2026-07-01T00:00:00",
+      most_recent_observed_timestamp: contextTime,
+    },
     activity_over_time: { range_start: "2026-08-14T00:00:00", range_end: contextTime, buckets: activityBuckets, selected_transaction: origin.origin_transaction_ref ? { transaction_ref: origin.origin_transaction_ref, timestamp: contextTime, currency: "CAD", amount: "12840.00" } : null },
     currency_activity: [
       { currency: "CAD", incoming_count: 92, outgoing_count: 142, incoming_amount: "182410.14", outgoing_amount: "266441.00" },
@@ -250,7 +270,6 @@ function accountDetailFor(identity: AccountIdentity, origin: AccountOrigin = {})
       { bank_country: "Singapore", incoming_transaction_count: 4, outgoing_transaction_count: 8, distinct_counterparties: 3, latest_interaction: "2026-08-18T10:10:00" },
     ],
     alert_history: baseAlerts.slice(0, 2).map((a) => ({ ...a, review_status: alertStatuses[a.alert_ref] })),
-    investigation_indicators: detailFor(transactions[0]).investigation_indicators,
     account_network: accountNetwork,
     transactions: { items: supportingRows, next_cursor: null, has_more: false },
     counterparties: accountNetwork.relationships,
@@ -264,6 +283,33 @@ function page<T>(items: T[], cursor?: string | null, limit = 50): CursorPage<T> 
   return { items: sliced, next_cursor: nextOffset < items.length ? btoa(String(nextOffset)) : null, has_more: nextOffset < items.length };
 }
 
+
+export async function fixtureGetHealth(): Promise<HealthResponse> {
+  await wait();
+  return { status: "ok", runtime_db_ready: true, latest_snapshot_id: snapshotId, latest_snapshot_cutoff: cutoff, ai_configured: true, product_version: "v2-fixture" };
+}
+
+export async function fixtureGetAlertDetail(alertRef: string): Promise<AlertDetailResponse> {
+  await wait();
+  const alert = baseAlerts.find((item) => item.alert_ref === alertRef);
+  if (!alert) throw { code: "NOT_FOUND", message: "Alert not found.", status: 404 };
+  return {
+    alert_ref: alert.alert_ref,
+    account: { account_ref: alert.account_ref, bank_id: alert.bank_id, account_id: alert.account_id, bank_country: alert.bank_country },
+    review_status: alertStatuses[alert.alert_ref] ?? "NOT_REVIEWED",
+    entry_snapshot_id: alert.entry_snapshot_id,
+    entry_cutoff: alert.entry_cutoff,
+    reason_code: alert.primary_reason,
+    network_review_band: alert.network_review_band,
+    network_pattern_score: "0.88421",
+    rank: 42,
+    percentile: "99.84",
+    scoring_eligible: true,
+    unscored_reason: null,
+    evidence_ids: [evidenceIds.priority, evidenceIds.activity],
+  };
+}
+
 export async function fixtureListAlerts(query: AlertQuery): Promise<CursorPage<AlertListItem>> {
   await wait();
   let items = baseAlerts.map((a) => ({ ...a, review_status: alertStatuses[a.alert_ref] }));
@@ -275,6 +321,13 @@ export async function fixtureListAlerts(query: AlertQuery): Promise<CursorPage<A
 export async function fixtureUpdateAlertReviewStatus(alertRef: string, reviewStatus: ReviewWorkflowStatus) {
   await wait();
   if (!baseAlerts.some((a) => a.alert_ref === alertRef)) throw { code: "NOT_FOUND", message: "Alert not found.", status: 404 };
+  const current = alertStatuses[alertRef] ?? "NOT_REVIEWED";
+  const allowed: Record<ReviewWorkflowStatus, readonly ReviewWorkflowStatus[]> = {
+    NOT_REVIEWED: ["NOT_REVIEWED", "IN_REVIEW"],
+    IN_REVIEW: ["IN_REVIEW", "REVIEWED"],
+    REVIEWED: ["REVIEWED"],
+  };
+  if (!allowed[current].includes(reviewStatus)) throw { code: "REVIEW_STATE_CONFLICT", message: "Review status cannot move backward.", status: 409 };
   alertStatuses = { ...alertStatuses, [alertRef]: reviewStatus };
   return { alert_ref: alertRef, review_status: reviewStatus, updated_at: "2026-08-26T17:20:00-04:00" };
 }
@@ -313,6 +366,22 @@ export async function fixtureListAccounts(query: AccountQuery): Promise<CursorPa
   return page(items, query.cursor, query.limit);
 }
 
+
+export async function fixtureGetAccountTransactions(accountRef: string, query: AccountTransactionQuery = {}): Promise<CursorPage<SupportingTransactionRow>> {
+  await wait();
+  const identity = Object.values(ACCOUNTS).find((item) => item.account_ref === accountRef);
+  if (!identity) throw { code: "NOT_FOUND", message: "Account not found.", status: 404 };
+  let items = supportingRows.filter((row) => row.sender.account_ref === accountRef || row.receiver.account_ref === accountRef);
+  if (query.currency) items = items.filter((row) => row.payment_currency === query.currency || row.receiving_currency === query.currency);
+  if (query.counterparty_account_ref) items = items.filter((row) => row.sender.account_ref === query.counterparty_account_ref || row.receiver.account_ref === query.counterparty_account_ref);
+  return page(items, query.cursor, query.limit);
+}
+
+export async function fixtureGetAccountNetwork(accountRef: string, origin: AccountOrigin = {}): Promise<AccountNetwork> {
+  const detail = await fixtureGetAccountDetail(accountRef, origin);
+  return detail.account_network;
+}
+
 export async function fixtureGetAccountDetail(accountRef: string, origin: AccountOrigin = {}): Promise<AccountDetailResponse> {
   await wait();
   if (origin.origin_alert_ref && origin.origin_transaction_ref) throw { code: "INVALID_CONTEXT", message: "Only one origin reference may be supplied.", status: 400 };
@@ -335,7 +404,7 @@ export async function fixtureStartInvestigation(body: InvestigationRequest): Pro
     run_status: "SUCCESS",
     subject_type: body.subject_type,
     subject_ref: body.subject_ref,
-    context: { context_time: body.origin_transaction_ref ? "2026-08-20T14:36:00" : cutoff, snapshot_id: snapshotId, detector_cutoff: cutoff, origin_alert_ref: body.origin_alert_ref, origin_transaction_ref: body.origin_transaction_ref },
+    context: { context_time: body.origin_transaction_ref ? "2026-08-20T14:36:00" : cutoff, snapshot_id: snapshotId, detector_cutoff: cutoff },
     findings: [
       { category: "DETECTOR_OUTPUT", text: "The applicable account state is in the HIGH Network Review Band for this historical detector snapshot.", evidence_ids: [evidenceIds.priority] },
       { category: "OBSERVED_FACT", text: "The bounded prior-24-hour context contains 18 transactions for the selected account.", evidence_ids: [evidenceIds.activity] },

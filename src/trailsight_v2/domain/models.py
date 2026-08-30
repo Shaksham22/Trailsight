@@ -343,6 +343,74 @@ class SupportingTransactionsFactsV2(FrozenModel):
     transactions: tuple[SupportingTransactionV2, ...]
 
 
+class EndpointAccountCardV2(FrozenModel):
+    account: AccountIdentityV2
+    network_review_band: NetworkReviewBand
+    detector_cutoff: str
+    observed_summary: str
+
+
+class InvestigationIndicatorV2(FrozenModel):
+    key: str
+    title: str
+    observed_text: str
+    detail: str
+    evidence_id: str
+    ui_target: UITargetV2
+    supporting_transaction_refs: tuple[str, ...]
+
+
+class TransactionActivityBucketV2(FrozenModel):
+    timestamp: str
+    currency: str
+    incoming_amount: str
+    outgoing_amount: str
+    transaction_count: int = Field(ge=0)
+
+
+class SelectedTransactionMarkerV2(FrozenModel):
+    transaction_ref: str
+    timestamp: str
+    currency: str
+    amount: str
+
+
+class ActivityContextV2(FrozenModel):
+    range_start: str
+    range_end: str
+    buckets: tuple[TransactionActivityBucketV2, ...]
+    selected_transaction: SelectedTransactionMarkerV2 | None
+
+
+class LocalNetworkSummaryV2(FrozenModel):
+    sender: AccountNetworkV2 | None
+    receiver: AccountNetworkV2 | None
+
+
+class CurrencyActivityV2(FrozenModel):
+    currency: str
+    incoming_count: int = Field(ge=0)
+    outgoing_count: int = Field(ge=0)
+    incoming_amount: str
+    outgoing_amount: str
+
+
+class SupportingEvidenceSummaryItemV2(FrozenModel):
+    label: str
+    evidence_id: str
+    evidence_type: EvidenceType
+    subject_type: SubjectType
+    subject_ref: str
+    context_time: str
+    snapshot_id: str | None
+    detector_cutoff: str | None
+    facts: dict[str, Any]
+    ui_target: UITargetV2
+    supporting_transaction_count: int = Field(ge=0)
+    supporting_transactions: tuple[SupportingTransactionV2, ...]
+    support_truncated: bool
+
+
 class BehavioralIndicatorsV2(FrozenModel):
     context: ContextIdentityV2
     sender_amount_behavior: AmountBehaviorV2 | None = None
@@ -360,6 +428,7 @@ class AccountDetailV2(FrozenModel):
     detector_support: DetectorSupportV2 | None
     observed_activity: AccountActivityV2
     activity_over_time: tuple[ActivityBucketV2, ...]
+    currency_activity: tuple[CurrencyActivityV2, ...]
     bank_country_flows: tuple[BankCountryFlowV2, ...]
     alert_history: tuple[AlertHistoryItemV2, ...]
     evidence_ids: tuple[str, ...]
@@ -379,6 +448,12 @@ class TransactionDetailV2(FrozenModel):
     transaction_facts: TransactionFactsV2
     review_state: TransactionReviewStateV2
     bank_country_route: BankCountryRouteV2
+    sender_account_card: EndpointAccountCardV2
+    receiver_account_card: EndpointAccountCardV2
+    investigation_indicators: tuple[InvestigationIndicatorV2, ...]
+    activity_context: ActivityContextV2
+    local_network_summary: LocalNetworkSummaryV2
+    supporting_evidence_summary: tuple[SupportingEvidenceSummaryItemV2, ...]
     indicators: BehavioralIndicatorsV2
     evidence_ids: tuple[str, ...]
 

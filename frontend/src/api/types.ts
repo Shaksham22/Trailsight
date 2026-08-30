@@ -24,6 +24,15 @@ export interface CursorPage<T> {
   has_more: boolean;
 }
 
+export interface HealthResponse {
+  status: string;
+  runtime_db_ready: boolean;
+  latest_snapshot_id: string;
+  latest_snapshot_cutoff: string;
+  ai_configured: boolean;
+  product_version: string;
+}
+
 export interface BankCountryRoutePoint {
   bank_id: string;
   bank_country: string;
@@ -45,12 +54,28 @@ export interface AlertListItem {
   bank_id: string;
   account_id: string;
   bank_country: string;
-  network_review_band: "HIGH";
+  network_review_band: ReviewBand;
   entry_snapshot_id: string;
   entry_cutoff: string;
   primary_reason: string;
   relevant_recent_transaction_count: number;
   review_status: ReviewWorkflowStatus;
+}
+
+export interface AlertDetailResponse {
+  alert_ref: string;
+  account: AccountIdentity;
+  review_status: ReviewWorkflowStatus;
+  entry_snapshot_id: string;
+  entry_cutoff: string;
+  reason_code: string;
+  network_review_band: ReviewBand;
+  network_pattern_score: string | null;
+  rank: number | null;
+  percentile: string | null;
+  scoring_eligible: boolean;
+  unscored_reason: string | null;
+  evidence_ids: string[];
 }
 
 export interface TransactionListItem {
@@ -81,9 +106,10 @@ export interface TransactionReviewState {
   aml_review_priority: ReviewBand;
   sender_band: ReviewBand;
   receiver_band: ReviewBand;
-  applicable_snapshot_id: string;
+  applicable_snapshot_id: string | null;
   detector_cutoff: string;
   derivation_text: string;
+  alert_involvement: boolean;
 }
 
 export interface TransactionFacts extends TransactionListItem {
@@ -95,7 +121,7 @@ export interface BankCountryRoute {
   sending: BankCountryRoutePoint;
   receiving: BankCountryRoutePoint;
   same_bank_country: boolean;
-  mapping_version: "bank-country-v1";
+  mapping_version: string;
 }
 
 export interface EndpointAccountCard {
@@ -150,6 +176,7 @@ export interface ActivityBucket {
   incoming_amount: string;
   outgoing_amount: string;
   transaction_count: number;
+  direction?: "INCOMING" | "OUTGOING";
 }
 
 export interface ActivityContext {
@@ -189,11 +216,15 @@ export interface AccountNetwork {
 }
 
 export interface SupportingTransactionRow extends TransactionListItem {
-  relationship_to_subject: string;
+  relationship_to_subject?: string;
+}
+
+export interface EvidenceSupportingTransaction {
+  transaction_ref: string;
 }
 
 export interface EvidenceDisplay {
-  label: string;
+  label: string | null;
   evidence_id: string;
   evidence_type: EvidenceType;
   subject_type: SubjectType;
@@ -201,11 +232,16 @@ export interface EvidenceDisplay {
   context_time: string;
   snapshot_id: string | null;
   detector_cutoff: string | null;
-  facts: Record<string, string | number | boolean | null>;
+  facts: Record<string, unknown>;
   ui_target: EvidenceUiTarget;
   supporting_transaction_count: number;
-  supporting_transactions: SupportingTransactionRow[];
+  supporting_transactions: EvidenceSupportingTransaction[];
   support_truncated: boolean;
+}
+
+export interface TransactionEvidenceDisplay extends Omit<EvidenceDisplay, "label" | "supporting_transactions"> {
+  label: string;
+  supporting_transactions: SupportingTransactionRow[];
 }
 
 export interface TransactionDetailResponse {
@@ -220,7 +256,7 @@ export interface TransactionDetailResponse {
     sender: AccountNetwork | null;
     receiver: AccountNetwork | null;
   };
-  supporting_evidence_summary: EvidenceDisplay[];
+  supporting_evidence_summary: TransactionEvidenceDisplay[];
 }
 
 export interface AccountContext {
@@ -231,21 +267,32 @@ export interface AccountContext {
   origin_transaction_ref: string | null;
 }
 
+export interface DetectorSupport {
+  first_order_neighbor_count: number | null;
+  second_order_neighbor_count: number | null;
+  community_id_or_stable_snapshot_local_index: string | null;
+  block_measure_1: string | null;
+  block_measure_2: string | null;
+  block_measure_3: string | null;
+}
+
 export interface NetworkReviewState {
   network_review_band: ReviewBand;
   network_pattern_score: string | null;
   rank: number | null;
   percentile: string | null;
-  detector_version: string;
-  policy_version: string;
-  structural_explanation: string;
+  scoring_eligible: boolean;
+  unscored_reason: string | null;
 }
 
 export interface ObservedActivity {
   incoming_count: number;
   outgoing_count: number;
   distinct_counterparties: number;
-  recent_24h_count: number;
+  incoming_distinct_counterparties: number;
+  outgoing_distinct_counterparties: number;
+  first_observed_timestamp: string | null;
+  most_recent_observed_timestamp: string | null;
 }
 
 export interface CurrencyActivityRow {
@@ -258,22 +305,31 @@ export interface CurrencyActivityRow {
 
 export interface BankCountryFlowRow {
   bank_country: string;
+  iso_alpha2?: string;
   incoming_transaction_count: number;
   outgoing_transaction_count: number;
   distinct_counterparties: number;
   latest_interaction: string;
 }
 
+export interface AccountAlertHistoryItem {
+  alert_ref: string;
+  entry_snapshot_id: string;
+  entry_cutoff: string;
+  primary_reason: string;
+  review_status: ReviewWorkflowStatus;
+}
+
 export interface AccountDetailResponse {
   account_identity: AccountIdentity;
   context: AccountContext;
   network_review_state: NetworkReviewState;
+  detector_support: DetectorSupport | null;
   observed_activity: ObservedActivity;
   activity_over_time: ActivityContext;
   currency_activity: CurrencyActivityRow[];
   bank_country_flows: BankCountryFlowRow[];
-  alert_history: AlertListItem[];
-  investigation_indicators: InvestigationIndicator[];
+  alert_history: AccountAlertHistoryItem[];
   account_network: AccountNetwork;
   transactions: CursorPage<SupportingTransactionRow>;
   counterparties: AccountNetwork["relationships"];
@@ -287,10 +343,14 @@ export interface AIFinding {
 
 export interface InvestigationResponse {
   investigation_id: string;
-  run_status: Exclude<AIRunStatus, "IDLE" | "LOADING" | "ERROR">;
+  run_status: Exclude<AIRunStatus, "IDLE" | "LOADING" | "ERROR" | "EVIDENCE_VALIDATION_FAILED">;
   subject_type: SubjectType;
   subject_ref: string;
-  context: AccountContext | { context_time: string; snapshot_id: string; detector_cutoff: string };
+  context: {
+    context_time: string;
+    snapshot_id: string | null;
+    detector_cutoff: string | null;
+  };
   findings: AIFinding[];
   limits: string[];
   display_evidence: EvidenceDisplay[];
@@ -336,4 +396,12 @@ export interface AccountQuery {
 export interface AccountOrigin {
   origin_alert_ref?: string | null;
   origin_transaction_ref?: string | null;
+}
+
+export interface AccountTransactionQuery extends AccountOrigin {
+  cursor?: string | null;
+  limit?: number;
+  direction?: "INCOMING" | "OUTGOING" | "BOTH";
+  currency?: string;
+  counterparty_account_ref?: string;
 }

@@ -1,8 +1,13 @@
-import type { AccountOrigin, AccountQuery, AlertQuery, TransactionQuery } from "./types.ts";
+import type { AccountOrigin, AccountQuery, AccountTransactionQuery, AlertQuery, TransactionQuery } from "./types.ts";
 
 function appendDefined(params: URLSearchParams, key: string, value: string | number | null | undefined) {
   if (value === undefined || value === null || value === "") return;
   params.set(key, String(value));
+}
+
+function normalizeDateTimeBoundary(value: string | undefined): string | undefined {
+  if (!value) return value;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
 }
 
 export function buildAlertSearchParams(query: AlertQuery): URLSearchParams {
@@ -21,8 +26,8 @@ export function buildTransactionSearchParams(query: TransactionQuery): URLSearch
   appendDefined(params, "q", query.q);
   appendDefined(params, "priority", query.priority);
   appendDefined(params, "alert_involvement", query.alert_involvement);
-  appendDefined(params, "date_from", query.date_from);
-  appendDefined(params, "date_to", query.date_to);
+  appendDefined(params, "date_from", normalizeDateTimeBoundary(query.date_from));
+  appendDefined(params, "date_to", normalizeDateTimeBoundary(query.date_to));
   appendDefined(params, "currency", query.currency);
   appendDefined(params, "payment_format", query.payment_format);
   appendDefined(params, "sending_bank_country", query.sending_bank_country);
@@ -48,6 +53,16 @@ export function buildAccountOriginParams(origin: AccountOrigin): URLSearchParams
   const params = new URLSearchParams();
   appendDefined(params, "origin_alert_ref", origin.origin_alert_ref);
   appendDefined(params, "origin_transaction_ref", origin.origin_transaction_ref);
+  return params;
+}
+
+export function buildAccountTransactionParams(query: AccountTransactionQuery): URLSearchParams {
+  const params = buildAccountOriginParams(query);
+  appendDefined(params, "cursor", query.cursor);
+  appendDefined(params, "limit", query.limit);
+  appendDefined(params, "direction", query.direction);
+  appendDefined(params, "currency", query.currency);
+  appendDefined(params, "counterparty_account_ref", query.counterparty_account_ref);
   return params;
 }
 
