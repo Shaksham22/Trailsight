@@ -107,6 +107,8 @@ Human review progress is joined from writable operational state:
 NOT_REVIEWED | IN_REVIEW | REVIEWED
 ```
 
+V2 permits only `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`. `REVIEWED` is terminal by product rule: without a workflow event/audit history, reopening cannot be represented safely.
+
 Alert-list `relevant_recent_transaction_count` is a deterministic domain fact:
 
 ```text
@@ -380,11 +382,13 @@ No arbitrary multi-hop expansion API exists.
 
 ## 13. Activity-over-time data
 
-For transaction detail, return bounded daily/interval buckets around the selected account/context rather than raw millions of points.
+For transaction detail, return bounded daily/interval buckets rooted on the sender account rather than raw millions of points.
 
-Recommended transaction-context chart:
+The transaction-context comparison is a fixed bounded V2 product rule:
 
-- prior 30 days if data exists, ending at selected timestamp;
+- sender account only; no receiver switching;
+- strictly prior 30 days relative to the resolved historical context, ending exclusively at the selected timestamp;
+- no 7D/30D/90D selector;
 - bucket by simulation day;
 - separate series by currency rather than summing unlike currencies;
 - selected transaction marker.
@@ -416,7 +420,9 @@ Account bank-country flow summary, if retained:
 - distinct counterparties;
 - latest interaction.
 
-Bound to top 12 countries by total transaction count with deterministic tie-break by ISO code.
+Return all aggregated Bank-Country connections for the resolved account/context. Order by total transaction count descending with a stable ISO-code tie-break. This complete aggregate must not reuse the Account Network max-24 or model-network max-12 bounds.
+
+Account alert history remains bounded to the latest 100 rows and carries `alert_history_total` plus `alert_history_truncated`. Returned history rows receive current mutable `review_status` at the API boundary so truncation is explicit and clients do not hydrate each row through Alert Detail.
 
 ## 15. Supporting transactions
 
@@ -439,6 +445,8 @@ Default support selection:
 - detector evidence: no fabricated transaction list; use structural facts and separately resolved local-network evidence.
 
 Model-facing supporting evidence is stricter and defined in the MCP contract.
+
+Application/UI-facing supporting transaction rows are bounded, display-ready summaries containing the authoritative account identities, Bank Countries, AML Review Priority, and related-alert state needed by the table. Clients must not call full Transaction Detail once per support row.
 
 ## 16. Evidence V2 envelope
 
@@ -583,6 +591,8 @@ resolve_evidence(evidence_id)
 ```
 
 List/search pagination belongs to repository/application services but factual derivations remain inside deterministic code.
+
+`list_account_transactions` returns the same authoritative display-ready transaction-list row shape used by transaction browsing. Account Detail renders these rows directly rather than hydrating each row through `get_transaction_detail`.
 
 MCP calls this facade; it does not implement its own SQL/statistics.
 

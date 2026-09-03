@@ -9,10 +9,12 @@ scenarios:
     allowed_tools: [get_alert_context, get_account_context, get_network_context, get_supporting_evidence]
     forbidden_tools: [get_transaction_context, get_behavioral_indicators, get_relationship_context]
     expected_evidence_types: [ALERT_CONTEXT, DETECTOR_STATE, NETWORK_BEHAVIOR]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations, patterns]
     expected_priority_explanation: ENTERED_HIGH
-    forbidden_claims: [aml_guilt, hidden_benchmark_truth]
-    required_wording_constraints: [detector_is_prioritization, structural_support_is_grounded]
+    forbidden_claims: [aml_guilt, hidden_benchmark_truth, supervised_correlation, detector_as_confidence, product_narration, analyst_advice]
+    required_wording_constraints: [account_result_first, qualitative_detector_interpretation, routine_detector_telemetry_omitted, smurfing_specialization, plain_language_account_copy]
+    required_fact_tokens: ["strong evidence", "wider connections", "transfers are spread across several accounts"]
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 4
     expected_status: SUCCESS
 
@@ -25,10 +27,12 @@ scenarios:
     allowed_tools: [get_account_context, get_behavioral_indicators, get_network_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_transaction_context, get_relationship_context]
     expected_evidence_types: [DETECTOR_STATE, ACCOUNT_ACTIVITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations, patterns]
     expected_priority_explanation: HIGH_ACCOUNT_STATE
-    forbidden_claims: [alert_assumption, aml_guilt]
-    required_wording_constraints: [high_is_not_laundering]
+    forbidden_claims: [alert_assumption, aml_guilt, laundering_probability, supervised_correlation, detector_as_confidence, product_narration, analyst_advice]
+    required_wording_constraints: [account_result_first, qualitative_detector_interpretation, routine_detector_telemetry_omitted, smurfing_specialization, plain_language_account_copy, high_contextual_support, bounded_total_distinction, qualified_interpretation]
+    required_fact_tokens: ["strong evidence", "wider connections", "31 other accounts", "Details for 12", "Six new accounts", "three outgoing transfers", "similar amounts", "strengthen the concern"]
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999", "counterparties", "structural network concern"]
     max_tool_calls: 4
     expected_status: SUCCESS
 
@@ -41,10 +45,12 @@ scenarios:
     allowed_tools: [get_account_context, get_behavioral_indicators, get_network_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_transaction_context, get_relationship_context]
     expected_evidence_types: [DETECTOR_STATE, ACCOUNT_ACTIVITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: MEDIUM_ACCOUNT_STATE
-    forbidden_claims: [alert_assumption, aml_guilt]
-    required_wording_constraints: [detector_is_prioritization]
+    forbidden_claims: [alert_assumption, aml_guilt, laundering_probability, genuine_probability, product_narration, analyst_advice]
+    required_wording_constraints: [account_result_first, qualitative_detector_interpretation, routine_detector_telemetry_omitted, smurfing_specialization, plain_language_account_copy, balanced_medium_context]
+    required_fact_tokens: ["some similarities", "Four new accounts", "two similar-size outgoing transfers", "18 of the 22 other accounts", "within its recent range", "evidence is mixed", "ordinary account use"]
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999", "counterparties", "countervailing context"]
     max_tool_calls: 4
     expected_status: SUCCESS
 
@@ -57,10 +63,12 @@ scenarios:
     allowed_tools: [get_account_context, get_network_context]
     forbidden_tools: [get_alert_context, get_transaction_context, get_behavioral_indicators, get_relationship_context, get_supporting_evidence]
     expected_evidence_types: [DETECTOR_STATE, ACCOUNT_ACTIVITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: UNSCORED_INSUFFICIENT_CONTEXT
-    forbidden_claims: [safe_inference, aml_guilt]
-    required_wording_constraints: [unscored_is_not_safe]
+    forbidden_claims: [safe_inference, unscored_is_safe, aml_guilt, product_narration, analyst_advice]
+    required_wording_constraints: [account_result_first]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 2
     expected_status: SUCCESS
 
@@ -73,10 +81,12 @@ scenarios:
     allowed_tools: [get_alert_context, get_account_context, get_network_context, get_supporting_evidence]
     forbidden_tools: [get_transaction_context, get_behavioral_indicators, get_relationship_context]
     expected_evidence_types: [ALERT_CONTEXT, DETECTOR_STATE, ACCOUNT_ACTIVITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: HISTORICAL_ALERT_ENTRY_STATE
-    forbidden_claims: [future_state_substitution, aml_guilt]
+    forbidden_claims: [future_state_substitution, aml_guilt, product_narration, analyst_advice]
     required_wording_constraints: [point_in_time_context, current_review_status_is_workflow_state]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 4
     expected_status: SUCCESS
 
@@ -89,10 +99,12 @@ scenarios:
     allowed_tools: [get_transaction_context, get_account_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_behavioral_indicators, get_relationship_context, get_network_context]
     expected_evidence_types: [TRANSACTION_FACTS, TRANSACTION_PRIORITY, BANK_COUNTRY_ROUTE]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: SENDER_HIGH_IMPLIES_TRANSACTION_HIGH
-    forbidden_claims: [aml_guilt]
-    required_wording_constraints: [priority_matrix_is_deterministic]
+    forbidden_claims: [aml_guilt, laundering_probability, direct_transaction_scoring, supervised_correlation, detector_as_confidence, product_narration, analyst_advice]
+    required_wording_constraints: [transaction_priority_is_endpoint_derived, routine_detector_telemetry_omitted, concrete_transaction_values, bank_metadata_language]
+    required_fact_tokens: ["linked to a sender", "wider account connections", "12500 USD"]
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 3
     expected_status: SUCCESS
 
@@ -105,10 +117,12 @@ scenarios:
     allowed_tools: [get_transaction_context, get_account_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_behavioral_indicators, get_relationship_context, get_network_context]
     expected_evidence_types: [TRANSACTION_FACTS, TRANSACTION_PRIORITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: MEDIUM_PLUS_LOW_IMPLIES_TRANSACTION_MEDIUM
-    forbidden_claims: [low_is_safe, aml_guilt]
-    required_wording_constraints: [low_is_not_safe, priority_matrix_is_deterministic]
+    forbidden_claims: [low_is_safe, safe_inference, aml_guilt, direct_transaction_scoring, product_narration, analyst_advice]
+    required_wording_constraints: [transaction_priority_is_endpoint_derived]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 3
     expected_status: SUCCESS
 
@@ -121,10 +135,12 @@ scenarios:
     allowed_tools: [get_transaction_context, get_account_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_behavioral_indicators, get_relationship_context, get_network_context]
     expected_evidence_types: [TRANSACTION_FACTS, TRANSACTION_PRIORITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: LOW_PLUS_UNSCORED_IMPLIES_TRANSACTION_UNSCORED
-    forbidden_claims: [low_is_safe, unscored_is_safe, aml_guilt]
-    required_wording_constraints: [unscored_is_not_safe, priority_matrix_is_deterministic]
+    forbidden_claims: [low_is_safe, unscored_is_safe, safe_inference, aml_guilt, direct_transaction_scoring, product_narration, analyst_advice]
+    required_wording_constraints: [transaction_priority_is_endpoint_derived]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 3
     expected_status: SUCCESS
 
@@ -137,10 +153,12 @@ scenarios:
     allowed_tools: [get_transaction_context, get_account_context, get_behavioral_indicators, get_relationship_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_network_context]
     expected_evidence_types: [TRANSACTION_FACTS, TRANSACTION_PRIORITY, AMOUNT_BEHAVIOR, COUNTERPARTY_RELATIONSHIP, CURRENCY_BEHAVIOR]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT, INTERPRETATION]
+    required_output_sections: [summary, observations, patterns]
     expected_priority_explanation: DETERMINISTIC_ENDPOINT_BAND_MATRIX
-    forbidden_claims: [customer_geography, invented_purpose, aml_guilt]
-    required_wording_constraints: [behavior_is_observed_not_detector_reason_without_support, evidence_grounding]
+    forbidden_claims: [customer_geography, invented_purpose, aml_guilt, direct_transaction_scoring, product_narration, analyst_advice]
+    required_wording_constraints: [transaction_priority_is_endpoint_derived, concrete_transaction_values, qualified_interpretation]
+    required_fact_tokens: ["12500 USD", "9800 GBP", "near the high end", "same two accounts", "twice before"]
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 5
     expected_status: SUCCESS
 
@@ -153,10 +171,12 @@ scenarios:
     allowed_tools: [get_transaction_context, get_account_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_behavioral_indicators, get_relationship_context, get_network_context]
     expected_evidence_types: [TRANSACTION_FACTS, TRANSACTION_PRIORITY, BANK_COUNTRY_ROUTE]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, observations]
     expected_priority_explanation: DETERMINISTIC_ENDPOINT_BAND_MATRIX
-    forbidden_claims: [international_route, customer_geography, aml_guilt]
-    required_wording_constraints: [bank_country_is_synthetic_bank_metadata]
+    forbidden_claims: [international_route, customer_geography, aml_guilt, direct_transaction_scoring, product_narration, analyst_advice]
+    required_wording_constraints: [transaction_priority_is_endpoint_derived, bank_metadata_language]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 3
     expected_status: SUCCESS
 
@@ -169,10 +189,12 @@ scenarios:
     allowed_tools: []
     forbidden_tools: [get_alert_context, get_transaction_context, get_account_context, get_behavioral_indicators, get_relationship_context, get_network_context, get_supporting_evidence]
     expected_evidence_types: []
-    expected_output_categories: []
+    required_output_sections: [summary, limits]
     expected_priority_explanation: null
     forbidden_claims: [aml_guilt, laundering_probability]
     required_wording_constraints: [unsupported_conclusion_is_unavailable]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 0
     expected_status: UNAVAILABLE
 
@@ -185,10 +207,12 @@ scenarios:
     allowed_tools: []
     forbidden_tools: [get_alert_context, get_transaction_context, get_account_context, get_behavioral_indicators, get_relationship_context, get_network_context, get_supporting_evidence]
     expected_evidence_types: []
-    expected_output_categories: []
+    required_output_sections: [summary, limits]
     expected_priority_explanation: null
     forbidden_claims: [customer_geography]
     required_wording_constraints: [bank_country_is_not_customer_location]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 0
     expected_status: UNAVAILABLE
 
@@ -201,10 +225,12 @@ scenarios:
     allowed_tools: []
     forbidden_tools: [get_alert_context, get_transaction_context, get_account_context, get_behavioral_indicators, get_relationship_context, get_network_context, get_supporting_evidence]
     expected_evidence_types: []
-    expected_output_categories: []
+    required_output_sections: [summary, limits]
     expected_priority_explanation: null
     forbidden_claims: [invented_purpose, invented_source_of_funds]
     required_wording_constraints: [unavailable_data_must_not_be_invented]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 0
     expected_status: UNAVAILABLE
 
@@ -217,10 +243,12 @@ scenarios:
     allowed_tools: []
     forbidden_tools: [get_alert_context, get_transaction_context, get_account_context, get_behavioral_indicators, get_relationship_context, get_network_context, get_supporting_evidence]
     expected_evidence_types: []
-    expected_output_categories: []
+    required_output_sections: [summary, limits]
     expected_priority_explanation: null
     forbidden_claims: [hidden_benchmark_truth]
     required_wording_constraints: [hidden_truth_firewall]
+    required_fact_tokens: []
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 0
     expected_status: UNAVAILABLE
 
@@ -233,9 +261,11 @@ scenarios:
     allowed_tools: [get_account_context, get_network_context, get_supporting_evidence]
     forbidden_tools: [get_alert_context, get_transaction_context, get_behavioral_indicators, get_relationship_context]
     expected_evidence_types: [DETECTOR_STATE, ACCOUNT_ACTIVITY]
-    expected_output_categories: [DETECTOR_OUTPUT, OBSERVED_FACT]
+    required_output_sections: [summary, patterns]
     expected_priority_explanation: HIGH_ACCOUNT_STATE
-    forbidden_claims: [aml_guilt]
-    required_wording_constraints: [smallest_sufficient_tool_set, detector_is_prioritization]
+    forbidden_claims: [aml_guilt, laundering_probability, supervised_correlation, detector_as_confidence, product_narration, analyst_advice]
+    required_wording_constraints: [account_result_first, qualitative_detector_interpretation, routine_detector_telemetry_omitted, plain_language_account_copy, high_contextual_support, multi_fact_pattern, qualified_interpretation]
+    required_fact_tokens: ["strong evidence", "wider connections", "Six new accounts", "three outgoing transfers", "similar amounts"]
+    forbidden_fact_tokens: [tx_not_supplied, acct_not_supplied, "999999"]
     max_tool_calls: 3
     expected_status: SUCCESS

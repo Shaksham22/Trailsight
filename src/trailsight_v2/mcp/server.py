@@ -78,7 +78,7 @@ async def _run_stdio(server: Server) -> None:
 
 
 def main() -> None:
-    """Create one WP03 service and one WP04A state reader for the stdio child lifetime."""
+    """Create one domain service and one state reader for the stdio child lifetime."""
     configured = os.environ.get("TRAILSIGHT_V2_DB_PATH")
     database_path = (
         Path(configured).expanduser()

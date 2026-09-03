@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#07111D" />
+    <meta name="theme-color" content="#0F1216" />
+    <script>
+      (() => {
+        let preference = "SYSTEM";
+        try {
+          const saved = localStorage.getItem("trailsight.appearance");
+          if (saved === "LIGHT" || saved === "DARK") preference = saved;
+        } catch {
+          preference = "SYSTEM";
+        }
+        const systemDark = typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
+        const theme = preference === "DARK" || (preference === "SYSTEM" && systemDark) ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.appearance = preference.toLowerCase();
+        document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", theme === "dark" ? "#0F1216" : "#F4F6F8");
+      })();
+    </script>
     <meta name="description" content="Trailsight V2 synthetic AML investigation workspace" />
     <title>Trailsight V2</title>
   </head>

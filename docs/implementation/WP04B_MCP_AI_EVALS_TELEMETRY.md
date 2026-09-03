@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP04B MCP, AI, EVALS, AND TELEMETRY
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP04B — Model-facing MCP, AI Investigation, Evals, and Telemetry
 
@@ -7,10 +9,10 @@ WP04B — Model-facing MCP, AI Investigation, Evals, and Telemetry
 **REGULAR CHATGPT**
 
 ## PURPOSE
-Implement the seven frozen stdio MCP tools as adapters over the deterministic InvestigationService, OpenAI Agents SDK orchestration, structured grounded AI output, evidence validation, one bounded follow-up routes, JSONL telemetry, prompts, and AI eval harness.
+Implement the seven frozen stdio MCP tools as adapters over the deterministic InvestigationService, OpenAI Agents SDK orchestration, structured analyst-summary output, one bounded follow-up route, JSONL telemetry, prompts, and the AI eval harness. The deterministic packet is the trust boundary; generated prose is structurally parsed but not post-validated against Evidence V2 citations.
 
 ## WHY THIS IMPLEMENTER
-The package uses existing V1 MCP/Agents/eval/JSONL patterns but has frozen V2 tools, evidence validation, prompt semantics, and bounded paths. It is large enough to require discipline but does not require detector math or repository-wide refactoring. An explicit SDK observability preflight prevents fake compliance.
+The package uses existing V1 MCP/Agents/eval/JSONL patterns but has frozen V2 tools, packet-boundary semantics, prompt semantics, and bounded paths. It is large enough to require discipline but does not require detector math or repository-wide refactoring. An explicit SDK observability preflight prevents fake compliance.
 
 ## PREREQUISITE
 Use the latest Manager-approved repository ZIP after WP02 and WP03 have both passed and Merge Gate A has produced the merged core (`R2_CORE.zip`). WP04B runs in parallel with WP04A and must not edit WP04A-owned API construction/runtime-state files.

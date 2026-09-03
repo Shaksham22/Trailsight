@@ -19,13 +19,13 @@ from trailsight_v2.domain.service import InvestigationServiceV2
 from trailsight_v2.mcp.contracts import TOOL_NAMES
 from trailsight_v2.mcp.scope import InvestigationScopeV2, scope_to_json
 
+from .alignment import BandAlignmentViolation, validate_band_alignment
 from .config import AIConfig, load_ai_config, load_prompt
 from .context import SeedContextV2
 from .models import (
-    InvestigationOutputV2,
     InvestigationResponseV2,
+    InvestigationSummaryV2,
     InvestigationStatus,
-    validate_output_for_mode,
 )
 from .telemetry import (
     InvestigationTraceV2,
@@ -35,11 +35,11 @@ from .telemetry import (
     estimate_cost_usd,
     utc_timestamp,
 )
-from .validation import EvidenceValidationError, validate_generated_output
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SUCCESSFUL_TOOL_STATUSES = {"OK"}
+MCP_CLIENT_SESSION_TIMEOUT_SECONDS = 10.0
 _TOOL_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
     "get_alert_context": ("alert_ref",),
     "get_transaction_context": ("transaction_ref",),
@@ -63,9 +63,8 @@ class ModelRunRequestV2:
 
 @dataclass(frozen=True, slots=True)
 class SDKExecutionV2:
-    output: InvestigationOutputV2
+    output: InvestigationSummaryV2
     mcp_calls: tuple[MCPCallTraceV2, ...]
-    authorized_transaction_refs: frozenset[str]
     token_usage: TokenUsageV2
 
 
@@ -79,7 +78,6 @@ class _ExecutionError(RuntimeError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.mcp_calls: tuple[MCPCallTraceV2, ...] = ()
-        self.authorized_transaction_refs: frozenset[str] = frozenset()
         self.token_usage = TokenUsageV2()
 
 
@@ -102,7 +100,7 @@ class ModelTimeoutError(_ExecutionError):
 @dataclass(frozen=True, slots=True)
 class InvestigationRunV2:
     response: InvestigationResponseV2 | None
-    structured_output: InvestigationOutputV2 | None
+    structured_output: InvestigationSummaryV2 | None
     mcp_calls: tuple[MCPCallTraceV2, ...]
     token_usage: TokenUsageV2
     estimated_cost_usd: float | None
@@ -129,7 +127,6 @@ class ToolCallRecorderV2:
     def __init__(self) -> None:
         self._pending: dict[str, _PendingCall] = {}
         self.calls: list[MCPCallTraceV2] = []
-        self.authorized_transaction_refs: set[str] = set()
 
     @property
     def has_incomplete_calls(self) -> bool:
@@ -157,12 +154,6 @@ class ToolCallRecorderV2:
         raw, payload = _tool_result_payload(result)
         status = str(payload.get("status", "ERROR")).upper()
         evidence_ids = _evidence_ids_from_payload(payload) if status in _SUCCESSFUL_TOOL_STATUSES else ()
-        if status in _SUCCESSFUL_TOOL_STATUSES:
-            for transaction in payload.get("transactions", ()) or ():
-                if isinstance(transaction, dict):
-                    transaction_ref = transaction.get("transaction_ref")
-                    if isinstance(transaction_ref, str) and transaction_ref:
-                        self.authorized_transaction_refs.add(transaction_ref)
         self.calls.append(
             MCPCallTraceV2(
                 sequence=pending.sequence,
@@ -248,6 +239,7 @@ class AgentsSDKExecutorV2:
             },
             cache_tools_list=True,
             use_structured_content=True,
+            client_session_timeout_seconds=MCP_CLIENT_SESSION_TIMEOUT_SECONDS,
             max_retry_attempts=0,
         )
         connected = False
@@ -275,7 +267,7 @@ class AgentsSDKExecutorV2:
                             instructions=request.system_prompt,
                             model=request.model_identifier,
                             mcp_servers=[server],
-                            output_type=InvestigationOutputV2,
+                            output_type=InvestigationSummaryV2,
                         )
                         try:
                             result = await Runner.run(
@@ -291,7 +283,7 @@ class AgentsSDKExecutorV2:
                             )
                         except ModelBehaviorError as exc:
                             raise StructuredOutputError(
-                                "The model did not satisfy InvestigationOutputV2"
+                                "The model did not satisfy InvestigationSummaryV2"
                             ) from exc
         except asyncio.TimeoutError as exc:
             recorder.finish_incomplete()
@@ -324,20 +316,18 @@ class AgentsSDKExecutorV2:
             raise mapped
         try:
             final_output = getattr(result, "final_output", None)
-            if not isinstance(final_output, InvestigationOutputV2):
-                final_output = InvestigationOutputV2.model_validate(final_output)
-            validated = validate_output_for_mode(final_output, mode=request.mode)
+            if not isinstance(final_output, InvestigationSummaryV2):
+                final_output = InvestigationSummaryV2.model_validate(final_output)
         except Exception as exc:
             mapped = StructuredOutputError(
-                "The model response violated run-mode structured-output constraints"
+                "The model response violated the investigation summary contract"
             )
             _attach_execution(mapped, recorder)
             mapped.token_usage = _token_usage_from_result(result)
             raise mapped from exc
         return SDKExecutionV2(
-            output=validated,
+            output=final_output,
             mcp_calls=tuple(recorder.calls),
-            authorized_transaction_refs=frozenset(recorder.authorized_transaction_refs),
             token_usage=_token_usage_from_result(result),
         )
 
@@ -417,23 +407,23 @@ class InvestigationRunnerV2:
     ) -> InvestigationRunV2:
         started_at = datetime.now(timezone.utc)
         started_clock = perf_counter()
-        output: InvestigationOutputV2 | None = None
+        output: InvestigationSummaryV2 | None = None
         calls: tuple[MCPCallTraceV2, ...] = ()
         usage = TokenUsageV2()
-        authorized_transactions: set[str] = set()
         validation_status: Literal["PASSED", "FAILED", "NOT_RUN"] = "NOT_RUN"
         failure_code: str | None = None
         response: InvestigationResponseV2 | None = None
 
         unsupported_limit = (
-            _unsupported_follow_up_limit(question)
+            _hidden_truth_follow_up_limit(question)
             if mode == "follow_up" and question is not None
             else None
         )
         if unsupported_limit is not None:
-            output = InvestigationOutputV2(
-                status=InvestigationStatus.UNAVAILABLE,
-                findings=[],
+            output = InvestigationSummaryV2(
+                summary="This follow-up cannot be answered from the bounded investigation packet.",
+                observations=[],
+                patterns=[],
                 limits=[unsupported_limit],
             )
             response = InvestigationResponseV2(
@@ -442,9 +432,10 @@ class InvestigationRunnerV2:
                 subject_type=seed.context.subject_type,
                 subject_ref=seed.context.subject_ref,
                 context=seed.context,
-                findings=(),
+                summary=output.summary,
+                observations=(),
+                patterns=(),
                 limits=(unsupported_limit,),
-                display_evidence=(),
             )
         else:
             request = self._request(
@@ -460,37 +451,28 @@ class InvestigationRunnerV2:
                 output = execution.output
                 calls = execution.mcp_calls
                 usage = execution.token_usage
-                authorized_transactions.update(execution.authorized_transaction_refs)
-                available = set(seed.seed_evidence_ids)
-                for call in calls:
-                    if call.result_status in _SUCCESSFUL_TOOL_STATUSES:
-                        available.update(call.evidence_ids)
-                validated = validate_generated_output(
-                    output=output,
-                    available_evidence_ids=available,
-                    authorized_transaction_refs=authorized_transactions,
-                    context=seed.context,
-                    service=service,
-                )
-                validation_status = "PASSED"
-                final_output = _application_output(output, calls)
-                response = InvestigationResponseV2(
-                    investigation_id=investigation_id,
-                    run_status=final_output.status,
-                    subject_type=seed.context.subject_type,
-                    subject_ref=seed.context.subject_ref,
-                    context=seed.context,
-                    findings=tuple(final_output.findings),
-                    limits=tuple(final_output.limits),
-                    display_evidence=validated.display_evidence,
-                )
-            except EvidenceValidationError:
-                validation_status = "FAILED"
-                failure_code = "EVIDENCE_VALIDATION_FAILED"
+                try:
+                    validate_band_alignment(seed, output)
+                except BandAlignmentViolation:
+                    validation_status = "FAILED"
+                    failure_code = "BAND_ALIGNMENT_FAILED"
+                else:
+                    validation_status = "PASSED"
+                    run_status, final_output = _application_output(output, calls)
+                    response = InvestigationResponseV2(
+                        investigation_id=investigation_id,
+                        run_status=run_status,
+                        subject_type=seed.context.subject_type,
+                        subject_ref=seed.context.subject_ref,
+                        context=seed.context,
+                        summary=final_output.summary,
+                        observations=tuple(final_output.observations),
+                        patterns=tuple(final_output.patterns),
+                        limits=tuple(final_output.limits),
+                    )
             except _ExecutionError as exc:
                 calls = exc.mcp_calls
                 usage = exc.token_usage
-                authorized_transactions.update(exc.authorized_transaction_refs)
                 failure_code = exc.code
             except Exception:
                 failure_code = "AI_ERROR"
@@ -518,7 +500,7 @@ class InvestigationRunnerV2:
             latency_ms=max(0.0, (perf_counter() - started_clock) * 1000),
             run_status=(failure_code or (response.run_status.value if response else "UNAVAILABLE")),
             mcp_calls=calls,
-            referenced_evidence_ids=tuple(_referenced_ids(output)),
+            referenced_evidence_ids=(),
             validation_status=validation_status,
             token_usage=usage,
             estimated_cost_usd=cost,
@@ -546,12 +528,26 @@ class InvestigationRunnerV2:
         origin_transaction_ref: str | None,
     ) -> ModelRunRequestV2:
         task = (
-            "Explain why this subject is prioritized for AML review and identify the most useful "
-            "available evidence for the analyst to examine."
+            "Write for a reader with no AML, graph-analysis, or data-science expertise. Explain "
+            "the GARG conclusion and define smurfing in ordinary language; keep scores, ranks, "
+            "snapshots, raw measures, and unexplained product jargon out of routine prose. Name "
+            "the strongest concrete activity facts and explain how they affect the interpretation. "
+            "For a medium result, plainly show why the evidence is mixed. For a low result, explain "
+            "only facts that support limited spread, stable behavior, or established relationships; "
+            "never pivot to a competing interpretation or contradict the GARG band. Band alignment "
+            "is mandatory. Never call the subject safe or the transactions genuine, and avoid "
+            "product narration or advice."
             if mode == "initial"
-            else "Answer only the current bounded follow-up using the smallest sufficient evidence set."
+            else (
+                "Answer exactly this one bounded follow-up by reasoning across the same investigation "
+                "packet. The answer must remain aligned with the supplied GARG band and must not "
+                "second-guess or contradict it."
+            )
         )
-        payload: dict[str, Any] = {"seed_context": seed.model_summary, "task": task}
+        payload: dict[str, Any] = {
+            "investigation_packet": seed.model_summary,
+            "task": task,
+        }
         if question is not None:
             payload["current_question"] = question
         scope = InvestigationScopeV2(
@@ -585,7 +581,6 @@ class InvestigationRunnerV2:
 
 def _attach_execution(error: _ExecutionError, recorder: ToolCallRecorderV2) -> None:
     error.mcp_calls = tuple(recorder.calls)
-    error.authorized_transaction_refs = frozenset(recorder.authorized_transaction_refs)
 
 
 def _safe_tool_input(tool_name: str, arguments: object) -> dict[str, Any]:
@@ -660,23 +655,21 @@ def _token_usage_from_result(result: object) -> TokenUsageV2:
 
 
 def _application_output(
-    output: InvestigationOutputV2,
+    output: InvestigationSummaryV2,
     calls: tuple[MCPCallTraceV2, ...],
-) -> InvestigationOutputV2:
+) -> tuple[InvestigationStatus, InvestigationSummaryV2]:
     failed = [call for call in calls if call.result_status not in _SUCCESSFUL_TOOL_STATUSES]
-    if not failed or output.status is InvestigationStatus.UNAVAILABLE:
-        return output
-    limits = list(output.limits)
-    if "One or more bounded evidence tools were unavailable." not in limits:
-        limits.append("One or more bounded evidence tools were unavailable.")
-    return InvestigationOutputV2(
-        status=InvestigationStatus.PARTIAL,
-        findings=output.findings,
-        limits=limits[:3],
+    if not failed:
+        return InvestigationStatus.SUCCESS, output
+    mandatory_limit = "One or more bounded evidence tools were unavailable."
+    limits = [mandatory_limit]
+    limits.extend(limit for limit in output.limits if limit != mandatory_limit)
+    return InvestigationStatus.PARTIAL, output.model_copy(
+        update={"limits": limits[:6]},
     )
 
 
-def _unsupported_follow_up_limit(question: str) -> str | None:
+def _hidden_truth_follow_up_limit(question: str) -> str | None:
     normalized = " ".join(question.lower().split())
     hidden_identifiers = ("is laundering", "patterns.txt")
     if any(token in normalized for token in hidden_identifiers) or (
@@ -684,30 +677,4 @@ def _unsupported_follow_up_limit(question: str) -> str | None:
         and ("benchmark" in normalized or "ground truth" in normalized or "pattern" in normalized)
     ):
         return "Hidden benchmark truth is not available to runtime investigations."
-    if (
-        "money laundering" in normalized
-        and any(token in normalized for token in ("actually", "is this", "was this", "probability", "likely"))
-    ) or any(token in normalized for token in ("is this account criminal", "is this transaction criminal")):
-        return "Trailsight prioritizes review but does not determine criminal intent or laundering."
-    if "customer" in normalized and any(
-        token in normalized
-        for token in ("where", "live", "lives", "located", "reside", "residence", "nationality", "geography")
-    ):
-        return "Customer geography is not available; Bank Country is synthetic bank metadata."
-    if any(
-        token in normalized
-        for token in ("source of funds", "transaction purpose", "purpose of", "kyc", "beneficial owner")
-    ):
-        return "KYC, source-of-funds, beneficial-ownership, and transaction-purpose facts are not available."
     return None
-
-
-def _referenced_ids(output: InvestigationOutputV2 | None) -> list[str]:
-    if output is None:
-        return []
-    ordered: list[str] = []
-    for finding in output.findings:
-        for evidence_id in finding.evidence_ids:
-            if evidence_id not in ordered:
-                ordered.append(evidence_id)
-    return ordered

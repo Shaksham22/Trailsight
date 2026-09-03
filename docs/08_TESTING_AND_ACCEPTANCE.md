@@ -17,6 +17,22 @@ Do not rely on the AI eval suite as a substitute for normal software tests.
 
 Normal pytest/build tests must not require a live model API key.
 
+### Final release-candidate validation sequence
+
+Run from the repository root unless the command changes directory:
+
+```bash
+uv run pytest tests/v2
+uv run python evals/v2/run_non_live.py
+
+cd frontend
+npm ci
+npm run test:contracts
+npm run build
+```
+
+The non-live eval is deterministic and credential-free. A real investigation, Evidence citation inspection, one successful follow-up, second-follow-up rejection, and telemetry inspection remain manual acceptance steps.
+
 ## 2. Data tests
 
 ### Raw schema validation
@@ -299,9 +315,12 @@ Required:
 
 - missing `runtime_state.json` initializes valid `runtime-state-v1`;
 - alert review progress persists and an absent alert entry reads `NOT_REVIEWED`;
-- initial investigation persists subject/ref, nullable origin refs, exact authoritative context identity, `follow_up_used=false`, and creation time;
+- `REVIEWED` is terminal and `REVIEWED -> IN_REVIEW` is rejected as an intentional V2 product policy;
+- successful initial investigation persists subject/ref, nullable origin refs, exact authoritative context identity, `follow_up_used=false`, and creation time; failed initial execution leaves no session;
 - runtime state contains no transcript, model reasoning, findings, AML disposition, evidence cache, or hidden IBM truth;
-- first follow-up atomically sets `follow_up_used=true` and reloads persisted subject/context;
+- a follow-up atomically reserves the available slot and reloads persisted subject/context;
+- a valid successful follow-up sets `follow_up_used=true`; configuration/provider/infrastructure failure releases the reservation and remains retryable;
+- concurrent follow-up requests cannot both succeed;
 - second follow-up returns HTTP 409 `FOLLOW_UP_ALREADY_USED`;
 - investigation context/follow-up flag survive app restart when the runtime-state path is retained;
 - corrupt runtime state is not silently overwritten;
@@ -320,6 +339,8 @@ Required:
 ### Transactions
 
 Test search by ref/account/bank and every required filter.
+
+Date-only **From Date** starts at `T00:00:00`; date-only **To Date** is analyst-inclusive and is sent as the next day's `T00:00:00` exclusive API bound. Explicit timestamp bounds retain precise exclusive semantics.
 
 ### Accounts
 
@@ -383,13 +404,13 @@ No hidden label/pattern fields in success/error payloads.
 
 ## 17. Frontend automated checks
 
-Use existing V1 test framework if already present and economical. Do not add a large new framework solely for appearance.
+Use the existing Node contract-test harness. Do not add a large browser framework solely for appearance.
 
 At minimum:
 
 - TypeScript typecheck;
 - production `npm run build`;
-- component/interaction tests for critical evidence/priority wording where current setup supports them.
+- `npm run test:contracts` for critical evidence, query, fixture-boundary, theme, route, and priority wording.
 
 Recommended focused tests:
 
@@ -410,7 +431,7 @@ With a small deterministic V2 test DB:
 
 - FastAPI boots with runtime DB read-only;
 - `runtime_state.json` writable and retained across restart;
-- React SPA static fallback does not shadow `/api/v2`;
+- normal Vite development proxies `/api` to FastAPI and never silently falls back to fixtures;
 - transaction/account/alert list/detail routes work;
 - AI router registers without credential requirement for deterministic startup;
 - MCP child can be launched by mocked/live integration path;
@@ -426,7 +447,7 @@ Required summary metrics:
 - scenario pass/fail;
 - tool selection;
 - tool efficiency;
-- evidence validity;
+- deterministic packet and MCP evidence validity;
 - factual support;
 - detector-vs-fact distinction;
 - priority explanation;
@@ -439,11 +460,11 @@ Release target:
 
 ```text
 unsupported criminal/laundering conclusions = 0
-evidence validation rate = 100%
+structured summary parse rate = 100%
 label leakage = 0
 ```
 
-A scenario failing these hard safety/grounding gates blocks AI acceptance even if other metrics are good.
+A scenario failing these hard safety/packet-boundary gates blocks AI acceptance even if other metrics are good.
 
 ## 20. Offline detector/policy evaluation tests
 
@@ -465,10 +486,12 @@ Prove:
 
 ### Alert flow
 
+- [ ] Search by Alert Ref, Account Ref/ID, and Bank ID; filters and cursor pagination still compose server-side.
 - [ ] Open a HIGH Network Pattern Alert.
 - [ ] Account Detail shows entry snapshot cutoff.
 - [ ] HIGH is described as review band, not laundering conclusion.
 - [ ] Mark In Review and Reviewed; reload persists progress.
+- [ ] Reviewed cannot be reopened in V2.
 - [ ] Detector outputs remain unchanged.
 
 ### Transaction flow
@@ -481,6 +504,7 @@ Prove:
 - [ ] Map says Bank Country.
 - [ ] Same-country route behaves correctly when selected.
 - [ ] Sender/receiver account cards navigate with historical origin.
+- [ ] Activity Context is the sender's strictly prior 30 days with no range or receiver selector.
 
 ### Account flow
 
@@ -492,9 +516,10 @@ Prove:
 ### AI flow
 
 - [ ] Initial investigation uses actual adaptive MCP tools.
-- [ ] Findings show category and evidence citations.
+- [ ] AI shows Summary, Key observations, Patterns noticed, and optional Limits without advice or raw Evidence V2 IDs.
 - [ ] Click E# focuses deterministic evidence without a model call.
 - [ ] One bounded follow-up works.
+- [ ] Configuration/provider/infrastructure failure does not consume the follow-up.
 - [ ] Second follow-up blocked.
 - [ ] “Is this money laundering?” abstains/does not conclude.
 - [ ] Bank Country question does not infer customer location.
@@ -503,7 +528,7 @@ Prove:
 ### Firewall
 
 - [ ] No runtime page/API/MCP/trace contains `Is Laundering` or pattern labels.
-- [ ] Raw IBM dataset is not in the Docker image/repository.
+- [ ] Raw IBM dataset is not in the repository or frontend artifact.
 - [ ] Runtime DB does not contain hidden truth.
 
 ## 22. Portfolio/demo acceptance criteria
@@ -520,42 +545,15 @@ V2 is demo-ready only when:
 8. Alerts/Transactions/Accounts and both detail pages work.
 9. World map, one-hop graph, and timeline work with correct semantics.
 10. Deterministic indicators are evidence-backed and cutoff-correct.
-11. AI uses bounded MCP, structured output, and fail-closed evidence validation.
-12. 15-scenario AI eval passes hard leakage/overclaim/evidence gates.
+11. AI uses the bounded deterministic packet, scoped MCP, and structured analyst-summary output.
+12. 15-scenario AI eval passes hard leakage/overclaim/packet-boundary gates.
 13. deterministic UI remains useful with OpenAI unavailable.
-14. one Docker runtime builds/runs with mounted read-only analytical DB.
+14. documented local FastAPI + Vite real-API startup works against the read-only analytical DB.
 15. README explains synthetic data, GARG scope, review-band semantics, bank-country enrichment, limitations, tests/evals, and demo flow.
 16. dead V1 Case/TransXion/Synthetic Region contracts are removed from the active V2 runtime.
 
-## FINAL TEST RESPONSIBILITY MATRIX
+## Final acceptance responsibility
 
-Package-level automated tests remain mandatory; user-local validation is only for expensive/credentialed/external-data/manual checks.
+Automated release-candidate checks cover the integrated V2 data/firewall, detector, domain/Evidence, API/state, MCP/AI lifecycle, deterministic eval, frontend contracts, fixture separation, theme policy, and production compilation seams.
 
-| Area | Primary worker | Final Codex responsibility | User-local responsibility |
-|---|---|---|---|
-| IBM ingestion/firewall/identity | WP01 | rerun practical deterministic tests/audit | full HI-Small preparation and scale timing |
-| GARG parity/snapshots/bands/alerts | WP02 Codex | package owner itself + final regression | full-final graph benchmark/long daily run when expensive |
-| Investigation domain/Evidence V2 | WP03 | rerun domain/evidence contract tests | inspect representative real historical contexts |
-| REST/runtime state | WP04A | rerun API/state tests | restart persistence/manual review-state workflow |
-| MCP/AI/evidence validation/telemetry | WP04B | rerun non-live MCP/AI tests and contract audit | credentialed real-model evals/cost |
-| Frontend visual foundation | WP05A | production build in final repo | screenshot comparison to approved UI-01..UI-06 |
-| Frontend real API behavior | WP05B | route/build/startup checks | end-to-end analyst workflow/visual acceptance |
-| Docker/whole repo | WP06 Codex | owns practical integration verification | exhaustive Docker/manual demo where long |
-
-### Required merge gates
-
-**Merge Gate A:** actual WP02 detector artifacts are readable by WP03 contract; GARG parity and the full-final feasibility gate are accepted before API/AI work becomes authoritative.
-
-**Merge Gate B:** WP04A + WP04B coexist without path collision; `/api/v2`, stdio MCP, runtime state, evidence validation, telemetry, and non-live evals pass.
-
-**Merge Gate C:** WP05A overlay builds on R3_BACKEND before real API integration begins.
-
-**Final Codex gate:** practical Python regression, configured lint/type/static checks, frontend production build, import/startup checks, Docker build/smoke where practical, dead-V1 import audit, and ground-truth leakage audit.
-
-**User-local final gate:** full real-data/GARG/model/manual/visual acceptance. A user-local check does not waive an automated test that is practical for a worker or Codex to run.
-
-
-
-## Implementation-worker testing authority
-
-Every runnable WP must add focused automated tests for its owned boundary, preserve previously passing relevant regression tests, keep default pytest deterministic/non-live where practical, test the ground-truth firewall at that boundary, and report exact commands/results in its completion report. Manual/user-local validation supplements rather than replaces normal automated tests. AI evals must reuse the production Evidence V2 validator rather than an eval-only weaker validator. Package-specific test ownership and user-local gates are defined in the corresponding runnable WP and `09_IMPLEMENTATION_ROADMAP.md`.
+User-local acceptance still owns expensive or credentialed checks: full external-data preparation when needed, long detector runs/benchmarks, one live model investigation, citation focus, one successful follow-up, second-follow-up rejection, telemetry inspection, and final visual workflow review. Manual acceptance supplements rather than replaces the deterministic commands above.

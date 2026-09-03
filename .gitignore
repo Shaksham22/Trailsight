@@ -1,11 +1,15 @@
-/external/TransXion/
-/TransXion/
+# External source checkouts and raw inputs are local-only.
 /external/
 /data/source/
 /data/raw/
 
-/data/runtime/*
-!/data/runtime/.gitkeep
+# Generated V2 analytical/runtime artifacts.
+/data/v2/source/
+/data/v2/runtime/*
+!/data/v2/runtime/.gitkeep
+/data/v2/offline-evaluation/
+/data/state/*
+!/data/state/.gitkeep
 /data/traces/*
 !/data/traces/.gitkeep
 /eval_results/
@@ -17,6 +21,9 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 .DS_Store
+.ipynb_checkpoints/
+/Untitled.ipynb
+/trailsight*.zip
 
 # Local Python build and coverage artifacts
 *.egg-info/
@@ -24,8 +31,3 @@ build/
 dist/
 .coverage
 htmlcov/
-
-# Trailsight V2 external IBM source / generated runtime / offline evaluation artifacts
-/data/v2/source/
-/data/v2/runtime/
-/data/v2/offline-evaluation/

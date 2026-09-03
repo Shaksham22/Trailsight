@@ -3,6 +3,8 @@ import { NavLink } from "react-router-dom";
 import type { AccountIdentity, ReviewBand, ReviewWorkflowStatus } from "../api/types";
 import { APP_ROUTES } from "../lib/routes";
 import { REVIEW_STATUSES, allowedReviewStatuses, reviewBandLabel, workflowLabel } from "../lib/workflow";
+import { useTheme } from "../theme/ThemeProvider";
+import { APPEARANCE_MODES, type AppearanceMode } from "../theme/theme";
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -15,12 +17,38 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="app-header__inner">
           <NavLink to="/alerts" className="brand" aria-label="Trailsight V2 home">TRAILSIGHT V2</NavLink>
           <PrimaryNavigation />
+          <ThemeControl />
           <SyntheticDataNotice compact />
         </div>
       </header>
       <main className="app-main">{children}</main>
     </div>
   );
+}
+
+export function ThemeControl() {
+  const { preference, resolvedTheme, setPreference } = useTheme();
+  return (
+    <div className="theme-control" role="group" aria-label="Appearance mode">
+      {APPEARANCE_MODES.map((mode) => (
+        <button
+          key={mode}
+          type="button"
+          className={preference === mode ? "is-active" : ""}
+          aria-pressed={preference === mode}
+          aria-label={`${appearanceLabel(mode)} appearance${mode === "SYSTEM" ? `, currently ${resolvedTheme.toLowerCase()}` : ""}`}
+          title={mode === "SYSTEM" ? `Follow system appearance (currently ${resolvedTheme.toLowerCase()})` : `Use ${mode.toLowerCase()} appearance`}
+          onClick={() => setPreference(mode)}
+        >
+          {appearanceLabel(mode)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function appearanceLabel(mode: AppearanceMode) {
+  return mode[0] + mode.slice(1).toLowerCase();
 }
 
 export function PrimaryNavigation() {

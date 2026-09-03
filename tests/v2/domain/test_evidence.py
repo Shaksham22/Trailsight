@@ -180,6 +180,7 @@ def test_detector_evidence_reuses_persisted_values_without_transaction_support(s
         == 0.987654321
     )
     assert evidence.facts.rank == 2
+    assert evidence.facts.eligible_account_count > 0
     assert evidence.facts.percentile == 98.7654321
     assert evidence.facts.network_review_band.value == "HIGH"
 

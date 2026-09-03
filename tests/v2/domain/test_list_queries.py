@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -112,6 +113,54 @@ def test_alert_list_order_cursor_country_and_immutable_projection(tmp_path: Path
         service.close()
 
 
+def test_alert_search_covers_identifiers_composes_filters_and_preserves_cursor(
+    tmp_path: Path,
+) -> None:
+    root = account_ref_for("B1", "ROOT")
+    peer = account_ref_for("B2", "PEER")
+    path = build_runtime_db(
+        tmp_path / "alert_search.duckdb",
+        [_tx(1, S1 + timedelta(hours=1))],
+        alerts=[
+            AlertSpec("alert_b", root, "snap_1", S1),
+            AlertSpec("alert_a", root, "snap_1", S1),
+            AlertSpec("alert_c", peer, "snap_2", S2),
+        ],
+    )
+    _set_high(path, "snap_2", peer)
+    service = _service(path)
+    try:
+        assert [item.alert_ref for item in service.list_alerts(
+            AlertListRequestV2(q="alert_c")
+        ).items] == ["alert_c"]
+        assert [item.alert_ref for item in service.list_alerts(
+            AlertListRequestV2(q=peer)
+        ).items] == ["alert_c"]
+        assert [item.alert_ref for item in service.list_alerts(
+            AlertListRequestV2(q="PEE")
+        ).items] == ["alert_c"]
+        assert [item.alert_ref for item in service.list_alerts(
+            AlertListRequestV2(q="B2")
+        ).items] == ["alert_c"]
+        assert [item.alert_ref for item in service.list_alerts(
+            AlertListRequestV2(q="alert_", bank_country=bank_country_for("B1").iso_alpha2)
+        ).items] == ["alert_a", "alert_b"]
+
+        first = service.list_alerts(AlertListRequestV2(q="alert_", limit=1))
+        assert [item.alert_ref for item in first.items] == ["alert_c"]
+        assert first.has_more is True
+        second = service.list_alerts(
+            AlertListRequestV2(q="alert_", limit=1, cursor=first.next_cursor)
+        )
+        assert [item.alert_ref for item in second.items] == ["alert_a"]
+
+        absent = service.list_alerts(AlertListRequestV2())
+        blank = service.list_alerts(AlertListRequestV2(q="   \t"))
+        assert blank == absent
+    finally:
+        service.close()
+
+
 def test_alert_membership_filters_apply_before_pagination(tmp_path: Path) -> None:
     root = account_ref_for("B1", "ROOT")
     path = build_runtime_db(
@@ -210,6 +259,99 @@ def test_transaction_list_stable_order_and_cursor_at_equal_timestamp(tmp_path: P
         )
         assert [item.transaction_ref for item in page2.items] == [txref(1)]
         assert service.list_transactions(TransactionListRequestV2(limit=2)).next_cursor == page1.next_cursor
+    finally:
+        service.close()
+
+
+def test_transaction_queries_limit_candidates_before_display_enrichment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    transactions = [
+        _tx(index, S1 + timedelta(minutes=index)) for index in range(1, 8)
+    ]
+    path = build_runtime_db(tmp_path / "candidate_first.duckdb", transactions)
+    service = _service(path)
+    repository = service._repository
+    captured: list[tuple[str, list[object] | None]] = []
+    original_fetchall = repository._fetchall
+
+    def capture(statement: str, parameters: list[object] | None = None):
+        captured.append((statement, parameters))
+        return original_fetchall(statement, parameters)
+
+    monkeypatch.setattr(repository, "_fetchall", capture)
+
+    def plan_for_last_query() -> dict[str, object]:
+        statement, parameters = captured[-1]
+        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            raw = connection.execute(
+                "EXPLAIN (FORMAT JSON) " + statement, parameters or []
+            ).fetchone()[1]
+        finally:
+            connection.close()
+        return json.loads(raw)[0]
+
+    def names(node: dict[str, object]) -> list[str]:
+        result = [str(node.get("name"))]
+        for child in node.get("children", []):
+            result.extend(names(child))
+        return result
+
+    def tables(node: dict[str, object]) -> list[str]:
+        table = node.get("extra_info", {}).get("Table")
+        result = [str(table)] if table else []
+        for child in node.get("children", []):
+            result.extend(tables(child))
+        return result
+
+    def first_named(node: dict[str, object], name: str) -> dict[str, object]:
+        if node.get("name") == name:
+            return node
+        for child in node.get("children", []):
+            found = first_named(child, name)
+            if found:
+                return found
+        return {}
+
+    try:
+        service.list_transactions(TransactionListRequestV2(limit=2))
+        list_plan = plan_for_last_query()
+        assert list_plan["name"] == "CTE"
+        assert list_plan["extra_info"]["CTE Name"] == "page_candidates"
+        list_candidate = list_plan["children"][0]
+        list_top = first_named(list_candidate, "TOP_N")
+        assert list_top["extra_info"]["Top"] == "3"
+        assert tables(list_candidate)
+        assert all(table.endswith(".transactions") for table in tables(list_candidate))
+        assert "CTE_SCAN" in names(list_plan["children"][1])
+
+        before_support = len(captured)
+        support = repository.supporting_transaction_rows(
+            [transactions[0].ref, transactions[1].ref]
+        )
+        assert [str(row[0]) for row in support] == [
+            transactions[0].ref,
+            transactions[1].ref,
+        ]
+        support_plans: list[dict[str, object]] = []
+        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            for statement, parameters in captured[before_support:]:
+                raw = connection.execute(
+                    "EXPLAIN (FORMAT JSON) " + statement, parameters or []
+                ).fetchone()[1]
+                support_plans.append(json.loads(raw)[0])
+        finally:
+            connection.close()
+        queried_tables = [table for plan in support_plans for table in tables(plan)]
+        assert len(support_plans) == 3
+        assert all(len(tables(plan)) == 1 for plan in support_plans)
+        assert {table.rsplit(".", 1)[-1] for table in queried_tables} == {
+            "transactions",
+            "transaction_review_states",
+            "banks",
+        }
     finally:
         service.close()
 
@@ -567,5 +709,7 @@ def test_q_is_bounded(tmp_path: Path) -> None:
             service.list_transactions(TransactionListRequestV2(q="x" * 257))
         with pytest.raises(InvalidInputError):
             service.list_accounts(AccountListRequestV2(q="x" * 257))
+        with pytest.raises(InvalidInputError):
+            service.list_alerts(AlertListRequestV2(q="x" * 257))
     finally:
         service.close()

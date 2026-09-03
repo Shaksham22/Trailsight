@@ -1,471 +1,167 @@
-# TRAILSIGHT V2 — RUNTIME AND DEPLOYMENT DESIGN
+# TRAILSIGHT V2 — RUNTIME, CONFIGURATION, AND LOCAL OPERATION
+
+This document describes the integrated V2 repository. The root [README](../README.md) is the shortest runbook.
 
 ## 1. Preparation/runtime split
 
-Trailsight V2 has two explicit phases.
+Trailsight has two explicit phases.
 
-### Offline preparation
+Offline preparation reads the external IBM HI-Small transaction CSV, writes a runtime-safe canonical DuckDB, enriches synthetic Bank Country metadata, and materializes GARG snapshots, review bands, transaction priorities, and Network Pattern Alerts. It may be long-running and is never triggered by an HTTP request.
 
-Runs on the developer/analyst machine before runtime:
+Interactive runtime is:
 
 ```text
-IBM HI-Small external source
--> runtime-safe canonical ingestion
--> bank-country enrichment
--> day-edge preparation
--> GARG daily snapshots
--> account states/bands
--> transaction review states
--> Network Pattern Alerts
--> generated analytical DuckDB
+React -> /api/v2 -> FastAPI -> deterministic domain -> read-only DuckDB
+                              -> local JSON runtime state
+                              -> optional bounded MCP/AI -> JSONL telemetry
 ```
 
-This phase may take significant wall-clock time and is restartable/checkpointed.
+The runtime requires neither the raw IBM CSV nor detector recomputation.
 
-### Interactive runtime
-
-Runs the product:
+## 2. Repository-local artifact layout
 
 ```text
-React static build
-+ FastAPI
-+ deterministic domain
-+ read-only generated DuckDB
-+ local MCP child for AI runs
-+ small writable runtime state
-+ writable JSONL traces
+data/v2/runtime/trailsight_v2.duckdb   # generated analytical DB, uncommitted
+data/v2/metadata/bank_country_v1.json  # checked-in deterministic metadata
+data/state/runtime_state.json          # mutable operational state, uncommitted
+data/traces/investigations-v2.jsonl    # mutable AI telemetry, uncommitted
+eval_results/                          # generated evaluation output, uncommitted
 ```
 
-Runtime never requires the raw IBM CSV or GARG recomputation.
+The raw IBM source remains outside the repository. The generated analytical DB is opened read-only by the V2 domain repository. Mutable review/session state is deliberately separate.
 
-## 2. Logical generated-artifact layout
+`runtime_state.json` is created deterministically when missing. It is not checked in, so a fresh clone never inherits another analyst's review progress or AI-session consumption.
 
-The implementation chat must inspect the actual V1 ZIP before choosing exact existing paths, but the V2 repository should converge on the following logical areas:
+## 3. Runtime-state contract
 
-```text
-data/generated/v2/
-  trailsight_v2.duckdb           # generated, uncommitted
-  detector/                      # snapshot checkpoints/intermediate outputs, uncommitted
-  manifests/                     # generation manifest/checksums, generated
+The JSON store contains only:
 
-data/state/
-  runtime_state.json             # writable local operational state, uncommitted
-
-data/traces/
-  investigations-v2.jsonl        # writable runtime trace, uncommitted
-
-eval_results/v2/
-  ai/
-  detector/
-```
-
-Raw IBM files remain outside the repository and are referenced by environment/config path.
-
-Checked-in configuration/provenance definitions may live under a V2 config/data-contract area, for example:
-
-- country metadata list;
-- detector config defaults;
-- prompt files;
-- eval scenario definitions;
-- documentation.
-
-## 3. Analytical runtime DB mode
-
-Mount/open the generated DuckDB **read-only** in product runtime.
-
-Benefits:
-
-- detector/account/transaction review state cannot mutate accidentally;
-- reproducibility is clear;
-- hidden-truth firewall is easier to assert;
-- MCP/API cannot become write paths.
-
-All mutable operational state is separate from the analytical DuckDB.
-
-## 4. Runtime-state persistence
-
-V2 has two small categories of mutable operational state that must survive a normal app restart when the mounted state path is retained:
-
-1. Network Pattern Alert review progress;
-2. minimal investigation-session metadata needed to reload authoritative context and enforce exactly one follow-up.
-
-Use one small JSON file rather than adding another database service. File name and logical shape are frozen:
-
-```text
-runtime_state.json
-
+```json
 {
   "version": "runtime-state-v1",
-  "alerts": {
-    "<alert_ref>": {
-      "review_status": "NOT_REVIEWED | IN_REVIEW | REVIEWED",
-      "updated_at": "<UTC RFC3339 timestamp>"
-    }
-  },
-  "investigations": {
-    "<investigation_id>": {
-      "subject_type": "ALERT | TRANSACTION | ACCOUNT",
-      "subject_ref": "<canonical ref>",
-      "origin_alert_ref": "<alert_ref | null>",
-      "origin_transaction_ref": "<transaction_ref | null>",
-      "context_identity": {
-        "kind": "ALERT_ENTRY | TRANSACTION | SNAPSHOT",
-        "ref": "<authoritative origin/snapshot ref>",
-        "time": "<canonical context timestamp>",
-        "snapshot_id": "<snapshot_id | null>"
-      },
-      "follow_up_used": false,
-      "created_at": "<UTC RFC3339 timestamp>"
-    }
-  }
+  "alerts": {},
+  "investigations": {}
 }
 ```
 
-Rules:
-
-- absent alert review entry = NOT_REVIEWED;
-- create an investigation entry once authoritative context is resolved and `investigation_id` is allocated;
-- investigation state stores no chat transcript, previous model response, private reasoning, evidence payload cache, AML disposition, or IBM hidden truth;
-- follow-up reloads subject/context only from this persisted entry plus deterministic runtime data;
-- accepting a follow-up atomically changes `follow_up_used=false -> true` before AI execution; a second attempt returns 409 `FOLLOW_UP_ALREADY_USED`;
-- mutations use one in-process lock, read/validate/modify, same-directory temp write, flush/fsync, then atomic replace;
-- single FastAPI process/worker remains the MVP concurrency assumption;
-- validate referenced alert/transaction/account/context against immutable runtime data before writing/reusing state;
-- state survives normal app restart when its mount/path is retained;
-- no AML disposition fields.
-
-If the existing V1 repository already has a simpler safe local state mechanism, implementation may reuse it only if it obeys this same contract.
-
-## 5. Configuration/environment
-
-Recommended runtime variables:
-
-```text
-TRAILSIGHT_V2_DB_PATH
-TRAILSIGHT_RUNTIME_STATE_PATH
-TRAILSIGHT_TRACE_PATH
-TRAILSIGHT_STATIC_DIR
-TRAILSIGHT_MODEL
-TRAILSIGHT_PROMPT_VERSION
-OPENAI_API_KEY
-```
-
-Offline preparation/detector variables:
-
-```text
-IBM_HI_SMALL_TRANSACTIONS_PATH
-IBM_HI_SMALL_PATTERNS_PATH          # offline evaluation only; never runtime app
-TRAILSIGHT_V2_GENERATED_DIR
-GARG_WORKERS                        # default 1
-```
-
-Optional telemetry pricing:
-
-```text
-TRAILSIGHT_MODEL_INPUT_USD_PER_MILLION
-TRAILSIGHT_MODEL_OUTPUT_USD_PER_MILLION
-TRAILSIGHT_EVAL_JUDGE_MODEL
-```
-
-Do not put real secrets/absolute user paths in committed `.env` files.
-
-## 6. Ground-truth path isolation
-
-The runtime command/container must not require or mount:
-
-```text
-IBM_HI_SMALL_PATTERNS_PATH
-raw Is Laundering data source
-```
-
-Offline evaluation is a separate developer command that explicitly opts into those files.
-
-Generated runtime DB startup validation rejects hidden-truth columns/views.
-
-## 7. Docker decision
-
-One application image, multi-stage build.
-
-### Frontend build stage
-
-- install existing/pinned Node dependencies;
-- build Vite V2 frontend;
-- produce static assets.
-
-### Python runtime stage
-
-Contains:
-
-- FastAPI application;
-- deterministic V2 domain;
-- MCP/AI packages;
-- built frontend assets;
-- Python dependencies.
-
-Does not contain:
-
-- raw IBM dataset;
-- `Patterns.txt`;
-- generated analytical DuckDB;
-- detector checkpoints;
-- runtime state;
-- traces;
-- API keys;
-- offline evaluation reports containing hidden truth.
-
-## 8. Docker runtime mounts
-
-Conceptual:
-
-```text
-/generated/trailsight_v2.duckdb -> /app/data/trailsight_v2.duckdb : read-only
-/state/                          -> /app/state/ : read-write
-/traces/                         -> /app/traces/ : read-write
-```
-
-Environment supplies the model key/config.
-
-Do not add Docker Compose merely for MCP; MCP remains a stdio child process inside the application container.
-
-## 9. Application startup
-
-Startup order:
-
-1. load runtime configuration;
-2. verify V2 DB path exists and is readable;
-3. open DuckDB read-only;
-4. validate source/product schema version;
-5. validate required tables;
-6. assert forbidden ground-truth columns/tables are absent;
-7. validate at least one COMPLETE detector snapshot exists (unless explicitly running a data-only developer mode);
-8. initialize deterministic service factory;
-9. validate/create `runtime_state.json` path and validate/create the `runtime-state-v1` structure;
-10. initialize trace writer path;
-11. register deterministic API routes;
-12. register AI routes; AI may report unconfigured if API key/model is absent;
-13. serve built React assets if static path exists.
-
-A missing OpenAI key must not stop deterministic application startup.
-
-## 10. Static serving
-
-Serve Vite production files through FastAPI in the final local runtime.
+Alert entries store current `review_status` and `updated_at`. Investigation entries store subject/origin identity, authoritative context identity, creation time, and `follow_up_used`.
 
 Rules:
 
-- `/api/v2/*` always wins over SPA fallback;
-- known static assets served directly;
-- non-API frontend paths fall back to `index.html` for React Router;
-- development backend can run without built static assets.
+- absent alert state is `NOT_REVIEWED`;
+- workflow is `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`;
+- `REVIEWED` is terminal in V2;
+- an investigation entry is written only after a valid initial AI response exists;
+- a successful follow-up persists `follow_up_used=true`;
+- configuration, provider, infrastructure, and other failed attempts release the in-process reservation and do not consume the follow-up;
+- concurrent follow-ups cannot both succeed within the one process;
+- writes use an in-process lock, validated read/modify/write, same-directory temporary file, fsync, and atomic replace;
+- the file contains no transcript, previous response, model reasoning, evidence cache, AML disposition, or hidden IBM truth.
 
-No nginx required.
+This is a **single-process MVP**. Do not start multiple FastAPI workers against the same JSON state file.
 
-## 11. MCP lifecycle
+## 4. Configuration
 
-For the bounded local demo, launch the one stdio MCP child per AI investigation/follow-up run and close it when complete, reusing the V1 pattern if already working.
-
-Pass only runtime-safe configuration:
-
-- V2 DB path;
-- investigation scope/context information;
-- no hidden-truth paths.
-
-Do not add HTTP MCP hosting or a process manager.
-
-## 12. Trace file behavior
-
-JSONL trace path is writable and separate from analytical DB.
-
-Requirements:
-
-- append one complete record/run where possible;
-- include exact prompt/model/tool order/latency/evidence validation;
-- rotate manually/developer-side if file becomes large; no log platform required;
-- traces are gitignored;
-- no hidden benchmark truth.
-
-## 13. Detector workflow execution
-
-The offline detector runner should expose explicit stages so a failure does not require restarting everything:
+The checked-in `.env.example` is the canonical variable list:
 
 ```text
-1. ingest/validate-runtime-safe-data
-2. build-bank-metadata
-3. prepare-daily-edge-deltas
-4. generate-snapshot <cutoff or all>
-5. assign-bands
-6. materialize-transaction-priorities
-7. generate-alerts
-8. validate-runtime-db
+IBM_HI_SMALL_TRANSACTIONS_PATH       # offline preparation only
+TRAILSIGHT_V2_DB_PATH                # default data/v2/runtime/trailsight_v2.duckdb
+TRAILSIGHT_RUNTIME_STATE_PATH        # default data/state/runtime_state.json
+TRAILSIGHT_TRACE_PATH                # default data/traces/investigations-v2.jsonl
+OPENAI_API_KEY                       # optional; server-side only
+TRAILSIGHT_MODEL                     # optional exact API model identifier
+TRAILSIGHT_PROMPT_VERSION            # investigation-v2
+TRAILSIGHT_MODEL_INPUT_USD_PER_MILLION   # optional telemetry estimate
+TRAILSIGHT_MODEL_OUTPUT_USD_PER_MILLION  # optional telemetry estimate
 ```
 
-Exact CLI names may be chosen by the implementation package after ZIP inspection, but stage boundaries and restart semantics are frozen.
+Copy `.env.example` to the ignored `.env` and start Uvicorn with `--env-file .env`. Never commit a real key or machine-specific absolute path. Never put `OPENAI_API_KEY` in `frontend/.env*`.
 
-### Resume behavior
+`GET /api/v2/health` reports:
 
-- recognize COMPLETE snapshot checkpoints with matching config hash;
-- skip/reuse them;
-- re-run FAILED/incomplete snapshot;
-- never mix outputs from different detector/identity/config versions into one runtime DB.
+- deterministic runtime readiness and current latest snapshot metadata;
+- `ai_configured=true` only when both `OPENAI_API_KEY` and `TRAILSIGHT_MODEL` are non-empty;
+- `product_version=v2`.
 
-## 14. Reproducibility manifest
+The health flag does not make a provider call. Prompt/model/provider validation occurs on an investigation request. Missing AI configuration never blocks deterministic startup.
 
-Generated runtime output must record:
+## 5. Local setup and startup
 
-```text
-Trailsight V2 schema/data-contract version
-IBM raw transaction SHA-256
-raw row count
-source min/max timestamp
-bank-country mapping version
-account identity version
-transaction-ref version
-GARG upstream/reference provenance
-GARG variant/config
-GARG eligibility version
-review-band policy version
-snapshot cutoffs generated
-snapshot statuses
-build timestamp
-application git commit if available
+One-time dependency setup:
+
+```bash
+cp .env.example .env
+uv sync --frozen
+npm --prefix frontend ci
 ```
 
-A runtime DB with mismatched/incomplete manifest fails startup rather than silently serving mixed state.
+When the prepared database is absent:
 
-## 15. Git ignore requirements
+```bash
+uv run python scripts/v2_data_prepare.py \
+  --source /absolute/path/to/HI-Small_Trans.csv \
+  --output data/v2/runtime/trailsight_v2.duckdb
 
-Ignore at minimum:
-
-```text
-.env
-__pycache__/
-.pytest_cache/
-frontend/node_modules/
-frontend/dist/
-data/generated/v2/
-data/state/runtime_state.json
-data/traces/*.jsonl
-eval_results/v2/
+uv run python scripts/v2_detector_prepare.py \
+  --database data/v2/runtime/trailsight_v2.duckdb
 ```
 
-Also ignore any repository-local accidental raw IBM source directories used by the project.
+Backend:
 
-Preserve small checked-in test fixtures/configs/documentation.
-
-## 16. Performance targets
-
-Targets are local-demo engineering goals, not enterprise SLAs.
-
-With warm filesystem/cache on the target Mac:
-
-- transaction list page (50 rows, common filters): **<500 ms target**;
-- alert/account list page: **<500 ms target**;
-- transaction detail deterministic payload: **<1.0 s target**;
-- account detail base payload: **<1.0 s target**;
-- bounded one-hop network: **<1.5 s target**;
-- evidence resolution/support page: **<1.0 s target**;
-- application startup after DB exists: **<10 s target**;
-- AI latency measured separately and does not block deterministic page render.
-
-If a specific selective lookup exceeds target, benchmark before adding DuckDB indexes/materialization.
-
-## 17. Detector performance targets
-
-Offline, not runtime:
-
-- final/full snapshot baseline target ≤30 min on target Mac;
-- peak RSS <70% physical RAM;
-- all daily snapshots run sequentially;
-- total snapshot build may take hours and is acceptable because it is a reproducible preparation step;
-- every snapshot checkpoint allows restart.
-
-If baseline fails, use the parity-gated compact scorer contingency in `02_DATA_AND_DETECTOR.md`.
-
-## 18. Failure recovery
-
-### Runtime DB missing/corrupt
-
-Fail startup with safe actionable message. Do not regenerate GARG from an HTTP request.
-
-### Incomplete detector snapshot
-
-Ignore it for applicable-snapshot lookup; only COMPLETE snapshots are valid. If latest expected snapshot missing, health may report degraded preparation completeness.
-
-### Runtime-state corruption
-
-Fail alert-review and investigation-session mutations and report a local state-file error while deterministic analytics remain read-only/usable. Do not overwrite corrupt state blindly.
-
-### Trace path unwritable
-
-Report telemetry degradation; do not expose raw OS error to browser.
-
-### AI unavailable
-
-Deterministic application remains usable.
-
-### MCP failure
-
-Only AI investigation fails/partials; deterministic application remains usable.
-
-## 19. Deployment flow
-
-```text
-Developer obtains IBM HI-Small externally
-        |
-        v
-Run V2 data + detector preparation
-        |
-        v
-Validate generated runtime DB + tests
-        |
-        v
-Build frontend
-        |
-        v
-Build one Docker image
-        |
-        v
-Run container with read-only DB mount + writable state/traces + API key env
-        |
-        v
-Open /alerts
+```bash
+uv run uvicorn trailsight_v2.api.app:create_app \
+  --factory --env-file .env --host 127.0.0.1 --port 8000
 ```
 
-No cloud deployment is required for V2 acceptance.
+Normal real-API frontend:
 
-## 20. Security/operational limits
+```bash
+cd frontend
+npm run dev
+```
 
-This is a local synthetic-data portfolio application, not production banking infrastructure.
+Vite proxies `/api` to `http://127.0.0.1:8000`. `VITE_TRAILSIGHT_API_BASE_URL` is only needed when the API is hosted elsewhere. Fixture mode is explicit through `npm run dev:fixture`; normal development and production builds have no runtime fixture fallback.
 
-Do not add:
+The production artifact check is `npm run build`. This repository does not require Docker and does not claim a production deployment topology.
 
-- authentication/IAM system merely for appearance;
-- Kubernetes;
-- managed database;
-- message bus;
-- distributed tracing backend;
-- secrets manager dependency;
-- background job infrastructure in runtime.
+## 6. AI and MCP lifecycle
 
-The heavy detector pipeline is an explicit developer/offline command.
+The AI runner creates the bounded local stdio MCP child for an investigation/follow-up and closes it when complete. It passes only the V2 DB path, runtime-state path, and closed investigation scope. The MCP surface contains exactly seven typed tools; it exposes no raw SQL, filesystem, arbitrary graph traversal, or hidden-truth lookup.
 
-## FINAL IMPLEMENTATION OWNERSHIP AND ARTIFACT HYGIENE
+One sanitized JSONL trace is appended per handled run where possible. It includes model/prompt provenance, timing, bounded tool order/status/latency/result sizes, evidence IDs, validation status, token usage, optional cost estimate, and failure code. It excludes secrets, transcript, private reasoning, full evidence payloads, raw history, AML disposition, and hidden truth.
 
-Implementation delivery follows `09_IMPLEMENTATION_ROADMAP.md`.
+## 7. Ground-truth isolation
 
-Root/runtime integration is intentionally deferred to WP06 Codex except for narrowly authorized package changes:
+Runtime startup does not require or mount hidden IBM labels or pattern annotations. Runtime schema validation rejects forbidden hidden-truth columns/views. The only permitted hidden-label reader is the explicit offline detector-evaluation path after detector outputs already exist.
 
-- WP01 may add source/runtime safety ignores to `.gitignore` and only strictly required data dependencies;
-- WP02 may add only detector/GARG dependencies required by its approved implementation;
-- WP05A/WP05B own `frontend/package.json` and its lockfile;
-- WP06 performs final Python/frontend dependency reconciliation, Docker, `.env.example`, README, startup, and generated-artifact audit.
+## 8. Reproducibility and failure behavior
 
-The inspected repository ZIP contains local `.env`, `.venv`, `frontend/node_modules`, `frontend/dist`, runtime DuckDB, traces, and eval outputs. Those are not package-delivery inputs/outputs to redistribute. Scoped `WPXX_DELIVERY.zip` files must contain only owned changed/new repository files plus merge/completion metadata. Secrets, raw IBM files, generated analytical DBs, traces, model eval outputs, local virtual environments, and node_modules must never be included in a replacement delivery.
+The generated DB records source checksum/count/range, data-contract and identity versions, Bank Country mapping version, detector provenance/config, snapshot state, and build metadata. Startup validates required tables and at least one applicable COMPLETE snapshot.
 
-Final Codex integration may remove proven-dead V1 runtime code only after active V2 imports/tests/builds demonstrate replacement. It must not delete V1 code preemptively during earlier waves.
+Failure behavior:
 
+- missing/corrupt DB: fail startup safely; never prepare data from HTTP;
+- incomplete snapshot: never use it as an applicable detector context;
+- corrupt runtime state: reject state reads/mutations; never overwrite it silently;
+- unwritable trace path: log telemetry degradation without exposing OS details to the browser;
+- AI/MCP/provider failure: deterministic UI and APIs remain usable.
 
+## 9. Release-candidate performance expectations
 
-## Implementation ownership note
+These are local-demo baselines, not service-level agreements. Recent warm prepared-DuckDB observations were approximately:
 
-Root runtime/deployment integration (`Dockerfile`, `.dockerignore`, `.env.example`, README/startup glue and final dependency reconciliation) is final-WP06 ownership unless a runnable earlier WP explicitly authorizes a narrow shared-file change. WP01 may add raw-data/generated-runtime `.gitignore` protections; those protections must survive WP06 reconciliation. This is an implementation ownership rule only and does not alter runtime architecture.
+- Alerts list: 22 ms;
+- Accounts list: 150 ms;
+- Account Detail: 291 ms median;
+- Account Network: 69 ms median;
+- Transactions list: 105–140 ms;
+- Transaction Detail: variable around 0.9–1.9 seconds at HTTP level after reducing the request from roughly 297 to roughly 32 SQL statements.
+
+Treat restored N+1 loops, display-before-limit queries, hundreds of Transaction Detail statements, or fixture inclusion in the initial production bundle as regressions. Do not add connection pooling, caching, indexing, or materialization without a newly measured reason.
+
+## 10. Repository hygiene and operational limits
+
+Ignored local/generated material includes `.env`, `.venv`, caches, `frontend/node_modules`, `frontend/dist`, generated V2 runtime artifacts, mutable state, traces, eval outputs, notebooks/checkpoints, and generated delivery ZIPs.
+
+Trailsight V2 is a local synthetic-data portfolio application. It does not include authentication/IAM, a multi-user state service, distributed workers, Kubernetes, cloud deployment, a message bus, or a secrets manager. Those omissions are explicit V2 limitations, not startup prerequisites.

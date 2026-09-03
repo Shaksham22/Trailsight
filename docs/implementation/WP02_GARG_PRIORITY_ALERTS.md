@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP02 GARG, PRIORITY, AND ALERTS
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP02 — GARG, Priority, and Network Pattern Alerts
 

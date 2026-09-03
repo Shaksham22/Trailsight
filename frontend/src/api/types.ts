@@ -1,15 +1,13 @@
 export type ReviewBand = "HIGH" | "MEDIUM" | "LOW" | "UNSCORED";
 export type ReviewWorkflowStatus = "NOT_REVIEWED" | "IN_REVIEW" | "REVIEWED";
 export type SubjectType = "ALERT" | "TRANSACTION" | "ACCOUNT";
-export type AIFindingCategory = "DETECTOR_OUTPUT" | "OBSERVED_FACT" | "INTERPRETATION";
 export type AIRunStatus =
   | "IDLE"
   | "LOADING"
   | "SUCCESS"
   | "PARTIAL"
   | "UNAVAILABLE"
-  | "ERROR"
-  | "EVIDENCE_VALIDATION_FAILED";
+  | "ERROR";
 
 export interface ApplicationError {
   code: string;
@@ -330,20 +328,16 @@ export interface AccountDetailResponse {
   currency_activity: CurrencyActivityRow[];
   bank_country_flows: BankCountryFlowRow[];
   alert_history: AccountAlertHistoryItem[];
+  alert_history_total: number;
+  alert_history_truncated: boolean;
   account_network: AccountNetwork;
   transactions: CursorPage<SupportingTransactionRow>;
   counterparties: AccountNetwork["relationships"];
 }
 
-export interface AIFinding {
-  category: AIFindingCategory;
-  text: string;
-  evidence_ids: string[];
-}
-
 export interface InvestigationResponse {
   investigation_id: string;
-  run_status: Exclude<AIRunStatus, "IDLE" | "LOADING" | "ERROR" | "EVIDENCE_VALIDATION_FAILED">;
+  run_status: Exclude<AIRunStatus, "IDLE" | "LOADING" | "ERROR">;
   subject_type: SubjectType;
   subject_ref: string;
   context: {
@@ -351,9 +345,10 @@ export interface InvestigationResponse {
     snapshot_id: string | null;
     detector_cutoff: string | null;
   };
-  findings: AIFinding[];
+  summary: string;
+  observations: string[];
+  patterns: string[];
   limits: string[];
-  display_evidence: EvidenceDisplay[];
 }
 
 export interface InvestigationRequest {
@@ -366,6 +361,7 @@ export interface InvestigationRequest {
 export interface AlertQuery {
   cursor?: string | null;
   limit?: number;
+  q?: string;
   review_status?: ReviewWorkflowStatus | "";
   bank_country?: string;
 }

@@ -166,17 +166,21 @@ class InvestigationToolAdapterV2:
     def get_account_context(self, account_ref: str) -> AccountContextResult:
         def build() -> AccountContextResult:
             self._require_root_account(account_ref)
-            account = self._account_identity_for_context(account_ref)
-            detector_evidence = self._resolve_account_evidence(
-                EvidenceType.DETECTOR_STATE, account_ref
+            origin_ref = (
+                self._scope.origin_ref
+                if self._scope.subject_type is SubjectType.ACCOUNT
+                else self._scope.subject_ref
             )
-            activity_evidence = self._resolve_account_evidence(
-                EvidenceType.ACCOUNT_ACTIVITY, account_ref
-            )
-            evidence_ids = (detector_evidence.evidence_id, activity_evidence.evidence_id)
+            detail = self._service.get_account_detail(account_ref, origin_ref=origin_ref)
+            if detail.context.context_identity != self._context.context_identity:
+                raise InvalidContextError("Account context does not match the MCP run context")
+            detector_evidence_id, activity_evidence_id = detail.evidence_ids[:2]
+            detector_evidence = self._service.resolve_evidence(detector_evidence_id)
+            evidence_ids = (detector_evidence_id, activity_evidence_id)
             self._available_evidence_ids.update(evidence_ids)
-            state = detector_evidence.facts
-            activity = activity_evidence.facts
+            account = detail.account_identity
+            state = detail.network_review_state
+            activity = detail.observed_activity
             return AccountContextResult(
                 status="OK",
                 evidence_ids=evidence_ids,
@@ -189,6 +193,7 @@ class InvestigationToolAdapterV2:
                 network_review_band=state.network_review_band.value,
                 network_pattern_score=state.network_pattern_score,
                 rank=state.rank,
+                eligible_account_count=detector_evidence.facts.eligible_account_count,
                 percentile=state.percentile,
                 unscored_reason=state.unscored_reason,
                 incoming_count=activity.incoming_count,
@@ -385,6 +390,7 @@ class InvestigationToolAdapterV2:
                 snapshot_id=support.snapshot_id,
                 detector_cutoff=self._context.detector_cutoff,
                 network_review_band=support.network_review_band.value,
+                eligible_account_count=support.eligible_account_count,
                 first_order_neighbor_count=support.first_order_neighbor_count,
                 second_order_neighbor_count=support.second_order_neighbor_count,
                 block_measure_support=block_support,
@@ -414,8 +420,6 @@ class InvestigationToolAdapterV2:
             source = self._service.resolve_evidence(evidence_id)
             if source.context_identity != self._context.context_identity:
                 raise InvalidContextError("Evidence is outside the current MCP run context")
-            if source.supporting_transaction_count <= 0:
-                raise InvalidContextError("Evidence does not have transaction support")
             display = self._service.get_supporting_evidence(evidence_id)
             transactions = display.supporting_transactions[:8]
             self._available_evidence_ids.add(display.evidence_id)
@@ -426,7 +430,20 @@ class InvestigationToolAdapterV2:
                 evidence_id=display.evidence_id,
                 supporting_transaction_count=display.supporting_transaction_count,
                 transactions=tuple(
-                    SupportingTransactionSummary(**item.model_dump(mode="python"))
+                    SupportingTransactionSummary(
+                        transaction_ref=item.transaction_ref,
+                        transaction_timestamp=item.transaction_timestamp,
+                        from_account_ref=item.from_account_ref,
+                        from_bank_id=item.from_bank_id,
+                        to_account_ref=item.to_account_ref,
+                        to_bank_id=item.to_bank_id,
+                        amount_paid=item.amount_paid,
+                        payment_currency=item.payment_currency,
+                        amount_received=item.amount_received,
+                        receiving_currency=item.receiving_currency,
+                        payment_format=item.payment_format,
+                        cross_currency=item.cross_currency,
+                    )
                     for item in transactions
                 ),
                 truncated=(
@@ -436,29 +453,6 @@ class InvestigationToolAdapterV2:
             )
 
         return self._execute(SupportingEvidenceResult, build, 12 * 1024)
-
-
-    def _account_identity_for_context(self, account_ref: str):
-        """Return a public-service identity without escaping the frozen run context."""
-        if self._scope.subject_type is SubjectType.ALERT:
-            detail = self._service.get_alert_context(self._scope.subject_ref)
-            if detail.context.context_identity != self._context.context_identity:
-                raise InvalidContextError("Alert account identity is outside the MCP context")
-            if detail.account_identity.account_ref != account_ref:
-                raise InvalidContextError("Account is not the alert root")
-            return detail.account_identity
-        if self._scope.subject_type is SubjectType.TRANSACTION:
-            detail = self._service.get_transaction_detail(self._scope.subject_ref)
-            if detail.context.context_identity != self._context.context_identity:
-                raise InvalidContextError("Transaction account identity is outside the MCP context")
-            for identity in (detail.transaction_facts.sender, detail.transaction_facts.receiver):
-                if identity.account_ref == account_ref:
-                    return identity
-            raise InvalidContextError("Account is not a transaction root")
-        detail = self._service.get_account_detail(account_ref, origin_ref=self._scope.origin_ref)
-        if detail.context.context_identity != self._context.context_identity:
-            raise InvalidContextError("Account context does not match the MCP run context")
-        return detail.account_identity
 
     def _resolve_account_evidence(self, evidence_type: EvidenceType, account_ref: str):
         evidence_id = self._issue_existing_evidence(

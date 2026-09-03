@@ -1,4 +1,4 @@
-import type { AIFindingCategory, ReviewBand, ReviewWorkflowStatus, SubjectType } from "./types.ts";
+import type { ReviewBand, ReviewWorkflowStatus, SubjectType } from "./types.ts";
 
 export interface ApiBankCountryV2 {
   bank_id: string;
@@ -235,14 +235,20 @@ export interface ApiSupportingTransactionV2 {
   transaction_timestamp: string;
   from_account_ref: string;
   from_bank_id: string;
+  from_account_id: string;
+  from_bank_country: ApiBankCountryV2;
   to_account_ref: string;
   to_bank_id: string;
+  to_account_id: string;
+  to_bank_country: ApiBankCountryV2;
   amount_paid: string;
   payment_currency: string;
   amount_received: string;
   receiving_currency: string;
   payment_format: string;
   cross_currency: boolean;
+  aml_review_priority: ReviewBand;
+  related_alert: string | null;
 }
 
 export interface ApiDisplayEvidenceV2 {
@@ -333,6 +339,7 @@ export interface ApiAlertHistoryItemV2 {
   entry_snapshot_id: string;
   entry_cutoff: string;
   reason_code: string;
+  review_status: ReviewWorkflowStatus;
 }
 
 export interface ApiAccountDetailV2 {
@@ -345,21 +352,12 @@ export interface ApiAccountDetailV2 {
   currency_activity: ApiCurrencyActivityV2[];
   bank_country_flows: ApiBankCountryFlowV2[];
   alert_history: ApiAlertHistoryItemV2[];
+  alert_history_total: number;
+  alert_history_truncated: boolean;
   evidence_ids: string[];
 }
 
-export type ApiAccountTransactionPageV2 = ApiCursorPage<ApiSupportingTransactionV2>;
-
-export interface ApiFindingV2 {
-  category: AIFindingCategory;
-  text: string;
-  evidence_ids: string[];
-}
-
-export interface ApiDisplayEvidenceItemV2 {
-  label: string;
-  evidence: ApiDisplayEvidenceV2;
-}
+export type ApiAccountTransactionPageV2 = ApiCursorPage<ApiTransactionListItemV2>;
 
 export interface ApiInvestigationResponseV2 {
   investigation_id: string;
@@ -367,7 +365,8 @@ export interface ApiInvestigationResponseV2 {
   subject_type: SubjectType;
   subject_ref: string;
   context: ApiInvestigationContextV2;
-  findings: ApiFindingV2[];
+  summary: string;
+  observations: string[];
+  patterns: string[];
   limits: string[];
-  display_evidence: ApiDisplayEvidenceItemV2[];
 }

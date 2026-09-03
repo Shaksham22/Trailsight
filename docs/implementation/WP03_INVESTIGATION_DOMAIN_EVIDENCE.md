@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP03 INVESTIGATION DOMAIN AND EVIDENCE V2
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP03 — Deterministic Investigation Domain and Evidence V2
 

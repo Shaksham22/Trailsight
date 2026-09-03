@@ -164,6 +164,7 @@ class DetectorStateEvidenceFactsV2(FrozenModel):
     snapshot_id: str
     account_ref: str
     scoring_eligible: bool
+    eligible_account_count: int = Field(ge=0)
     network_pattern_score: float | None
     rank: int | None
     percentile: float | None
@@ -327,14 +328,20 @@ class SupportingTransactionV2(FrozenModel):
     transaction_timestamp: str
     from_account_ref: str
     from_bank_id: str
+    from_account_id: str
+    from_bank_country: BankCountryV2
     to_account_ref: str
     to_bank_id: str
+    to_account_id: str
+    to_bank_country: BankCountryV2
     amount_paid: str
     payment_currency: str
     amount_received: str
     receiving_currency: str
     payment_format: str
     cross_currency: bool
+    aml_review_priority: NetworkReviewBand
+    related_alert: str | None
 
 
 class SupportingTransactionsFactsV2(FrozenModel):
@@ -431,6 +438,8 @@ class AccountDetailV2(FrozenModel):
     currency_activity: tuple[CurrencyActivityV2, ...]
     bank_country_flows: tuple[BankCountryFlowV2, ...]
     alert_history: tuple[AlertHistoryItemV2, ...]
+    alert_history_total: int = Field(ge=0)
+    alert_history_truncated: bool
     evidence_ids: tuple[str, ...]
 
 
@@ -461,6 +470,7 @@ class TransactionDetailV2(FrozenModel):
 class AlertListRequestV2(FrozenModel):
     cursor: str | None = None
     limit: int = 50
+    q: str | None = None
     bank_country: str | None = None
     include_alert_refs: tuple[str, ...] | None = None
     exclude_alert_refs: tuple[str, ...] | None = None
@@ -561,7 +571,7 @@ class RuntimeMetadataV2(FrozenModel):
 
 
 class AccountTransactionPageV2(FrozenModel):
-    items: tuple[SupportingTransactionV2, ...]
+    items: tuple[TransactionListItemV2, ...]
     next_cursor: str | None
     has_more: bool
 

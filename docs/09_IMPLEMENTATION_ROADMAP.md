@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — FINAL IMPLEMENTATION ROADMAP
 
+> **Historical delivery record.** WP01–WP06 are complete. This file no longer governs startup, validation, packaging, or release actions; use the root README and docs `00`–`08`. References below to candidate ZIPs, parallel delivery, or future package work describe the completed implementation process only.
+
 **Status:** AUTHORITATIVE IMPLEMENTATION-ORIENTED SYSTEM DESIGN.
 
 This document governs implementation sequencing, implementer allocation, ZIP lineages, merge gates, and cross-package ownership. It does **not** change the frozen product/domain architecture.

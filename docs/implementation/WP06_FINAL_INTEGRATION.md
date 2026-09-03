@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP06 FINAL CODEX INTEGRATION
 
+> **Historical implementation ticket — superseded by the completed authoritative working-tree integration.** Do not create the ZIP/report artifacts described below; the current release-candidate commands and documentation live in the root README and docs `07`–`08`.
+
 ## PACKAGE
 WP06 — Final Repository Integration, Docker, Regression, Cleanup, and Documentation
 

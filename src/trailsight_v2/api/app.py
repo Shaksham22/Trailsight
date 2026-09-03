@@ -1,4 +1,4 @@
-"""FastAPI application factory and WP04A/WP04B composition seam."""
+"""FastAPI application factory for the integrated Trailsight V2 runtime."""
 
 from __future__ import annotations
 
@@ -138,7 +138,7 @@ def create_app() -> FastAPI:
 
 
 def _register_optional_ai_router(app: FastAPI) -> None:
-    """Register WP04B when ``trailsight_v2.ai.http`` is installed/present."""
+    """Register the optional AI route package when it is installed/present."""
     module_name = "trailsight_v2.ai.http"
     try:
         module_spec = importlib_util.find_spec(module_name)

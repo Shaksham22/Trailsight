@@ -37,6 +37,42 @@ export const BANK_COUNTRY_VISUALIZATION_CENTROIDS: readonly BankCountryVisualiza
 
 export const BANK_COUNTRY_OPTIONS = BANK_COUNTRY_VISUALIZATION_CENTROIDS.map((country) => country.bank_country);
 
+// Canonical Bank Country names stay unchanged. This explicit adapter names the
+// corresponding bundled GeoJSON polygon, or null for intentional marker-only
+// rendering where the low-resolution geometry has no feature.
+export const BANK_COUNTRY_MAP_GEOMETRY_NAMES: Readonly<Record<string, string | null>> = {
+  Canada: "Canada",
+  "United States": "United States of America",
+  Mexico: "Mexico",
+  Brazil: "Brazil",
+  "United Kingdom": "United Kingdom",
+  France: "France",
+  Germany: "Germany",
+  Netherlands: "Netherlands",
+  Switzerland: "Switzerland",
+  Spain: "Spain",
+  "United Arab Emirates": "United Arab Emirates",
+  "Saudi Arabia": "Saudi Arabia",
+  India: "India",
+  Pakistan: "Pakistan",
+  Bangladesh: "Bangladesh",
+  Singapore: null,
+  China: "China",
+  Japan: "Japan",
+  "South Korea": "South Korea",
+  Australia: "Australia",
+  "South Africa": "South Africa",
+  Nigeria: "Nigeria",
+  Kenya: "Kenya",
+  Philippines: "Philippines",
+};
+
 export function getBankCountryVisualizationCentroid(bankCountry: string): BankCountryVisualizationCentroid | null {
   return BANK_COUNTRY_VISUALIZATION_CENTROIDS.find((country) => country.bank_country === bankCountry) ?? null;
+}
+
+export function getBankCountryMapGeometryName(bankCountry: string): string | null {
+  return Object.prototype.hasOwnProperty.call(BANK_COUNTRY_MAP_GEOMETRY_NAMES, bankCountry)
+    ? BANK_COUNTRY_MAP_GEOMETRY_NAMES[bankCountry]
+    : null;
 }

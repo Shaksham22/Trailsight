@@ -1,5 +1,5 @@
 import type { AccountNetwork, ActivityContext, BankCountryFlowRow, BankCountryRoute } from "../api/types.ts";
-import { getBankCountryVisualizationCentroid, type BankCountryVisualizationCentroid } from "./bankCountries.ts";
+import { getBankCountryMapGeometryName, getBankCountryVisualizationCentroid, type BankCountryVisualizationCentroid } from "./bankCountries.ts";
 
 export interface RouteVisualModel {
   sameCountry: boolean;
@@ -24,6 +24,7 @@ export function buildRouteVisualModel(route: BankCountryRoute): RouteVisualModel
 export interface AccountBankCountryConnection {
   bankCountry: string;
   centroid: BankCountryVisualizationCentroid | null;
+  geometryName: string | null;
   incomingTransactionCount: number;
   outgoingTransactionCount: number;
   distinctCounterparties: number;
@@ -43,18 +44,22 @@ export interface AccountBankCountryLine {
 
 export interface AccountBankCountryVisualModel {
   root: BankCountryVisualizationCentroid | null;
+  rootGeometryName: string | null;
   connections: AccountBankCountryConnection[];
   incomingLines: AccountBankCountryLine[];
   outgoingLines: AccountBankCountryLine[];
   unmappedCountries: string[];
+  polygonUnavailableCountries: string[];
   summary: string;
 }
 
 export function buildAccountBankCountryVisualModel(rootBankCountry: string, flows: BankCountryFlowRow[]): AccountBankCountryVisualModel {
   const root = getBankCountryVisualizationCentroid(rootBankCountry);
+  const rootGeometryName = getBankCountryMapGeometryName(rootBankCountry);
   const connections = flows.map((flow): AccountBankCountryConnection => ({
     bankCountry: flow.bank_country,
     centroid: getBankCountryVisualizationCentroid(flow.bank_country),
+    geometryName: getBankCountryMapGeometryName(flow.bank_country),
     incomingTransactionCount: flow.incoming_transaction_count,
     outgoingTransactionCount: flow.outgoing_transaction_count,
     distinctCounterparties: flow.distinct_counterparties,
@@ -78,10 +83,35 @@ export function buildAccountBankCountryVisualModel(rootBankCountry: string, flow
   }
   const mappedNames = [...new Set(connections.map((connection) => connection.bankCountry))].sort();
   const unmappedCountries = connections.filter((connection) => !connection.centroid).map((connection) => connection.bankCountry);
+  const polygonUnavailableCountries = [
+    ...(!rootGeometryName ? [rootBankCountry] : []),
+    ...connections.filter((connection) => !connection.geometryName).map((connection) => connection.bankCountry),
+  ].filter((country, index, countries) => countries.indexOf(country) === index);
   const summary = mappedNames.length
     ? `Root Bank Country: ${rootBankCountry}. Connected Bank Countries (${mappedNames.length}): ${mappedNames.join(", ")}.`
     : `Root Bank Country: ${rootBankCountry}. No Bank-Country flow rows are available in this resolved context.`;
-  return { root, connections, incomingLines, outgoingLines, unmappedCountries, summary };
+  return { root, rootGeometryName, connections, incomingLines, outgoingLines, unmappedCountries, polygonUnavailableCountries, summary };
+}
+
+export function accountBankCountryTooltip(
+  params: unknown,
+  regionTooltips: ReadonlyMap<string, string>,
+): string {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return "";
+  if ("data" in params) {
+    const data = params.data;
+    if (
+      data
+      && typeof data === "object"
+      && !Array.isArray(data)
+      && "tooltipText" in data
+      && typeof data.tooltipText === "string"
+    ) return data.tooltipText;
+  }
+  if ("name" in params && typeof params.name === "string") {
+    return regionTooltips.get(params.name) ?? "";
+  }
+  return "";
 }
 
 export function activityCurrencies(activity: ActivityContext): string[] {

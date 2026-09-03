@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP01 IBM DATA FOUNDATION
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP01 — IBM Data Foundation
 

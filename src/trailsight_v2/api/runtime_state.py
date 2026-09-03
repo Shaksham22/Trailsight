@@ -1,7 +1,7 @@
 """Atomic mutable operational state for Trailsight V2.
 
 The analytical DuckDB is immutable at runtime. This store owns only human alert
-review progress and minimal investigation-session metadata needed by WP04B.
+review progress and minimal investigation-session metadata needed by AI follow-up.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ RUNTIME_STATE_VERSION = "runtime-state-v1"
 DEFAULT_RUNTIME_STATE_PATH = Path("data/state/runtime_state.json")
 _RUNTIME_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _FORBIDDEN_TEXT = ("is laundering", "patterns.txt")
+MAX_ALERT_STATUS_BATCH = 100
 
 
 class RuntimeStateError(RuntimeError):
@@ -101,8 +103,8 @@ class InvestigationSessionState:
 class RuntimeStateStore:
     """Single-process, restart-safe JSON runtime-state store.
 
-    Public integration methods intentionally provide all state access required by
-    WP04B; callers must never read ``runtime_state.json`` directly.
+    Public integration methods intentionally provide the complete state boundary;
+    callers must never read ``runtime_state.json`` directly.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
@@ -110,6 +112,7 @@ class RuntimeStateStore:
         self.path = Path(configured) if configured else DEFAULT_RUNTIME_STATE_PATH
         self.path = self.path.expanduser().resolve()
         self._lock = RLock()
+        self._follow_ups_in_progress: set[str] = set()
         with self._lock:
             if self.path.exists():
                 self._read_validated_unlocked()
@@ -122,13 +125,33 @@ class RuntimeStateStore:
 
     def get_alert_review_status(self, alert_ref: str) -> ReviewStatus:
         """Return mutable review progress; absent alert state is NOT_REVIEWED."""
-        self._require_ref(alert_ref, "alert_ref")
+        return self.get_alert_review_statuses((alert_ref,))[alert_ref]
+
+    def get_alert_review_statuses(
+        self, alert_refs: Iterable[str]
+    ) -> dict[str, ReviewStatus]:
+        """Read and validate runtime state once for a bounded set of alert refs."""
+        refs: list[str] = []
+        seen: set[str] = set()
+        for alert_ref in alert_refs:
+            self._require_ref(alert_ref, "alert_ref")
+            if alert_ref not in seen:
+                refs.append(alert_ref)
+                seen.add(alert_ref)
+        if len(refs) > MAX_ALERT_STATUS_BATCH:
+            raise RuntimeStateCorruptError()
+        if not refs:
+            return {}
         with self._lock:
             state = self._read_validated_unlocked()
-            raw = state["alerts"].get(alert_ref)
-            if raw is None:
-                return ReviewStatus.NOT_REVIEWED
-            return ReviewStatus(raw["review_status"])
+            return {
+                alert_ref: (
+                    ReviewStatus.NOT_REVIEWED
+                    if state["alerts"].get(alert_ref) is None
+                    else ReviewStatus(state["alerts"][alert_ref]["review_status"])
+                )
+                for alert_ref in refs
+            }
 
     def set_alert_review_status(
         self, alert_ref: str, review_status: ReviewStatus | str
@@ -170,11 +193,11 @@ class RuntimeStateStore:
     def alert_filter_membership(
         self, review_status: ReviewStatus | str
     ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
-        """Return (include_refs, exclude_refs) for WP03 alert list membership.
+        """Return (include_refs, exclude_refs) for server-side alert-list membership.
 
         Explicit IN_REVIEW/REVIEWED filters become include sets. NOT_REVIEWED is
         represented as exclusion of all persisted non-NOT_REVIEWED refs so
-        pagination/filtering stays inside the WP03 bounded DuckDB query.
+        pagination/filtering stays inside the bounded DuckDB query.
         """
         try:
             requested = ReviewStatus(review_status)
@@ -260,7 +283,25 @@ class RuntimeStateStore:
             return self._session_from_json(investigation_id, entry)
 
     def consume_follow_up(self, investigation_id: str) -> InvestigationSessionState:
-        """Atomically consume the single follow-up slot and return persisted context."""
+        """Compatibility helper that reserves and immediately consumes a follow-up."""
+        self.begin_follow_up(investigation_id)
+        return self.complete_follow_up(investigation_id)
+
+    def begin_follow_up(self, investigation_id: str) -> InvestigationSessionState:
+        """Atomically reserve the one follow-up slot without consuming it."""
+        self._require_ref(investigation_id, "investigation_id")
+        with self._lock:
+            state = self._read_validated_unlocked()
+            entry = state["investigations"].get(investigation_id)
+            if entry is None:
+                raise InvestigationStateNotFoundError()
+            if entry["follow_up_used"] is True or investigation_id in self._follow_ups_in_progress:
+                raise FollowUpAlreadyUsedError()
+            self._follow_ups_in_progress.add(investigation_id)
+            return self._session_from_json(investigation_id, entry)
+
+    def complete_follow_up(self, investigation_id: str) -> InvestigationSessionState:
+        """Persist consumption only after a valid terminal follow-up result exists."""
         self._require_ref(investigation_id, "investigation_id")
         with self._lock:
             state = self._read_validated_unlocked()
@@ -268,10 +309,20 @@ class RuntimeStateStore:
             if entry is None:
                 raise InvestigationStateNotFoundError()
             if entry["follow_up_used"] is True:
+                self._follow_ups_in_progress.discard(investigation_id)
                 raise FollowUpAlreadyUsedError()
+            if investigation_id not in self._follow_ups_in_progress:
+                raise RuntimeStateCorruptError()
             entry["follow_up_used"] = True
             self._write_unlocked(state)
+            self._follow_ups_in_progress.remove(investigation_id)
             return self._session_from_json(investigation_id, entry)
+
+    def release_follow_up(self, investigation_id: str) -> None:
+        """Release an unsuccessful in-process follow-up reservation for retry."""
+        self._require_ref(investigation_id, "investigation_id")
+        with self._lock:
+            self._follow_ups_in_progress.discard(investigation_id)
 
     @staticmethod
     def _empty_state() -> dict[str, Any]:

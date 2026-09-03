@@ -2,18 +2,18 @@
 
 ## 1. AI responsibility
 
-The LLM is an **evidence-selection and synthesis assistant**. It is not the detector, risk model, calculation engine, or final AML decision-maker.
+The LLM is an **analytical description layer**. Trailsight calculates deterministic facts; the model starts from the actual detector/review result, summarizes important visible information, and connects supplied facts into additional patterns. It is not the detector, risk model, calculation engine, workflow recommendation engine, or final AML decision-maker.
 
 Primary question:
 
-> **Why is this account/transaction prioritized for AML review, and which available evidence should the analyst examine?**
+> **What does the supplied investigation data say about this account or transaction?**
 
 The model may:
 
 - select the smallest useful set of approved MCP tools;
 - summarize Network Review Band / AML Review Priority and their deterministic derivation;
 - describe observed account, transaction, relationship, network, currency, and bank-country facts;
-- identify which evidence deserves human inspection;
+- reason across multiple supplied observations to identify qualified descriptive patterns;
 - state limitations/unknowns;
 - answer one bounded follow-up.
 
@@ -30,37 +30,24 @@ The model must not:
 - reveal or use IBM hidden truth;
 - access arbitrary DuckDB/graph data.
 
-## 2. Finding semantics
+## 2. Summary semantics
 
-Every AI finding has one of three explicit categories:
+The model returns four direct report sections:
 
 ```text
-DETECTOR_OUTPUT
-OBSERVED_FACT
-INTERPRETATION
+summary
+observations
+patterns
+limits
 ```
 
-Examples:
+`summary` translates the GARG result or endpoint-derived transaction priority into concise qualitative AML pattern language, then adds at most one compact sentence with the strongest concrete non-detector evidence from the supplied data. Routine summaries do not expose the Network Pattern Score, rank, eligible population, snapshot date, percentile, neighborhood counts, or raw block measures; those remain internal support unless the analyst explicitly asks for a detector detail. Activity facts are described as appearing alongside the structural interpretation rather than as causes of the GARG result. `observations` contains additional concrete supplied activity facts. `patterns` contains qualified synthesis across those facts. `limits` appears only for specific missing or bounded context. The model does not generate advice, finding categories, citations, or Evidence V2 IDs.
 
-### DETECTOR_OUTPUT
+Evidence treatment is calibrated to the band and written for a non-specialist reader. HIGH copy names the strongest available activity facts that increase concern and explains why. MEDIUM copy plainly identifies facts on both sides and says when the evidence is mixed. LOW copy says that GARG found little evidence of the wider smurfing pattern and selects only facts that reinforce limited spread, stable behavior, or established relationships. A LOW response cannot pivot into a competing concern narrative; activity details that cannot be aligned honestly are omitted. The assistant never describes an account as safe or assigns a probability that transactions are genuine.
 
-> The account was in the HIGH Network Review Band in snapshot `S`.
+Routine generated prose avoids unexplained internal language such as “structural network concern,” “detector signal,” “topology,” “endpoint-derived,” “counterparty,” “countervailing context,” “bounded,” and “supplied activity.” It prefers “wider account connections,” “other accounts,” “sender,” “recipient,” and direct explanations of how each fact changes the interpretation. The first reference to smurfing includes a short plain-language definition.
 
-This can cite detector-state evidence.
-
-### OBSERVED_FACT
-
-> The account had 18 distinct outgoing counterparties in the prior 24-hour window.
-
-This can cite deterministic activity/network evidence.
-
-### INTERPRETATION
-
-> The high fan-out may be relevant when reviewing the account's elevated network-priority state.
-
-This must cite the underlying factual evidence and use qualified language. It must not convert correlation/context into criminal conclusion.
-
-The model should not collapse these categories into one sentence such as “The account is HIGH because it sent to 18 counterparties” unless the detector evidence directly establishes that causal connection. GARG's score and ordinary indicators are related investigation context, not interchangeable explanations.
+The model must not claim an ordinary activity indicator caused the GARG result unless supplied detector support establishes that causal connection. GARG structural measures and contextual transaction/activity facts remain distinct.
 
 ## 3. Prompt strategy
 
@@ -68,6 +55,7 @@ Checked-in prompt files, versioned manually:
 
 ```text
 prompts/v2/investigation-v1.md
+prompts/v2/investigation-v2.md   # active subject-first analytical copy contract
 prompts/v2/support-judge-v1.md   # optional eval judge, never runtime truth
 ```
 
@@ -75,12 +63,12 @@ Configuration:
 
 ```text
 TRAILSIGHT_MODEL=<exact model identifier>
-TRAILSIGHT_PROMPT_VERSION=investigation-v1
+TRAILSIGHT_PROMPT_VERSION=investigation-v2
 ```
 
 Prompt version maps to a known checked-in file. Do not accept arbitrary filesystem prompt paths from user requests.
 
-Do not create prompt v2 until v1 has a measured evaluation failure that the prompt change is intended to address.
+Prompt v2 records the measured copy-contract correction from product/tutorial and detector-telemetry language to subject-first qualitative analytical prose without changing the runtime trust boundary. Because runtime GARG scoring is label-blind, the prose may describe resemblance to the smurfing-like typology but never similarity to previously confirmed laundering transactions, a laundering probability, or a statistical confidence interval.
 
 Every trace/eval result records the exact model and prompt version.
 
@@ -94,11 +82,11 @@ The runtime prompt must state, compactly:
 4. GARG is a specialized account/network structural detector.
 5. Transaction priority is derived from historical endpoint bands.
 6. Bank Country is synthetic bank metadata, not customer location.
-7. Material factual claims require evidence IDs from successful tools/current subject facts.
-8. Distinguish DETECTOR_OUTPUT / OBSERVED_FACT / INTERPRETATION.
+7. Concrete claims must come from the bounded packet or successful bounded tools.
+8. Distinguish concrete observations from qualified multi-fact patterns.
 9. Call only the minimum relevant tools.
 10. Abstain when the available data cannot establish an answer.
-11. Never invent evidence IDs.
+11. Never output Evidence V2 IDs or analyst instructions.
 12. Never reveal/claim access to hidden benchmark labels/patterns.
 
 Do not place full account history or graph dumps in the system prompt.
@@ -115,7 +103,7 @@ origin context resolved by deterministic domain
 
 ### Seeded model context
 
-The application supplies a small deterministic subject summary plus one or more seed evidence IDs.
+The application supplies a compact, bounded deterministic investigation packet plus the Evidence V2 IDs that ground its facts. The same packet projection is rebuilt in the persisted point-in-time context for the one permitted follow-up.
 
 For a transaction this includes:
 
@@ -126,18 +114,25 @@ For a transaction this includes:
 - sender/receiver Network Review Bands;
 - detector cutoff;
 - Bank Country route;
-- evidence IDs for transaction facts/priority/route.
+- same-side amount history (sample count, median, percentile when available);
+- prior relationship/new-counterparty facts;
+- 30-day activity context;
+- sender/receiver detector and bounded local-network context;
+- bounded supporting transaction rows;
+- evidence IDs for transaction facts, priority, route, behavior, relationships, endpoint detector/activity/network state, and support.
 
 For an account/alert:
 
 - account/bank/country;
 - alert context if present;
 - Network Review Band;
+- exact band semantics (HIGH top 1%, MEDIUM next 4%, LOW remaining eligible scored accounts, UNSCORED insufficient valid network context);
+- Network Pattern Score, rank, eligible population, and persisted GARG structural measures when available;
 - detector cutoff;
-- bounded observed-activity summary;
-- seed evidence IDs.
+- bounded observed activity, timeline buckets, currencies, direct counterparties, Bank-Country flows, and supporting transactions;
+- seed evidence IDs for every packet fact category.
 
-No raw hidden truth, full history, or unrestricted transaction list is included.
+No raw hidden truth, full history, or unrestricted transaction list is included. Packet projections cap activity buckets, direct relationships, Bank-Country flows, and supporting transactions.
 
 ### Tool selection
 
@@ -160,11 +155,11 @@ What differs about this transaction compared with prior activity?
 -> get_behavioral_indicators + relationship context as useful
 ```
 
-Calling every tool by default is an eval failure for tool efficiency.
+The packet is normally sufficient for the initial summary. Tools remain available for a bounded detail gap or the follow-up; calling every tool by default is an eval failure for tool efficiency.
 
 ## 6. Bounded follow-up
 
-Exactly one follow-up per initial investigation.
+Exactly one successful follow-up per initial investigation.
 
 Request contains only:
 
@@ -187,7 +182,7 @@ It does **not** replay:
 - previous full AI response;
 - unlimited evidence history.
 
-If the follow-up needs evidence already used, the model can re-call the bounded tool. `parent_investigation_id` is both the minimal operational lookup key for persisted subject/context/follow-up state and trace linkage; it is not conversational memory. The server atomically consumes the single follow-up slot before launching the accepted follow-up. A second follow-up returns HTTP 409 `FOLLOW_UP_ALREADY_USED`.
+If the follow-up needs evidence already used, the model can re-call the bounded tool. `parent_investigation_id` is both the minimal operational lookup key for persisted subject/context/follow-up state and trace linkage; it is not conversational memory. The server atomically reserves the slot during execution and persists consumption only after a valid successful follow-up. Configuration/provider/infrastructure failure releases the reservation for retry. Concurrent requests cannot both succeed, and a request after successful consumption returns HTTP 409 `FOLLOW_UP_ALREADY_USED`.
 
 Questions relying on ambiguous pronouns such as “what about that one?” may be rejected/abstained because V2 does not build conversational memory resolution.
 
@@ -196,66 +191,38 @@ Questions relying on ambiguous pronouns such as “what about that one?” may b
 Use structured output only; no arbitrary prose parsing fallback.
 
 ```text
-InvestigationOutputV2
-  status: SUCCESS | PARTIAL | UNAVAILABLE
-  findings: 0..5 FindingV2
-  limits: 0..3 string
+InvestigationSummaryV2
+  summary: string
+  observations: list[string]
+  patterns: list[string]
+  limits: list[string]
 ```
 
-```text
-FindingV2
-  category: DETECTOR_OUTPUT | OBSERVED_FACT | INTERPRETATION
-  text: non-empty string
-  evidence_ids: non-empty list[string]
-```
+The model does not generate Evidence V2 IDs. FastAPI adds the application-level run status. A parsed response is `SUCCESS`; a parsed response produced alongside a bounded tool failure is `PARTIAL` and receives the application-generated limit `One or more bounded evidence tools were unavailable.` Provider, infrastructure, timeout, and malformed-schema failures remain normal AI failures.
 
 Rules:
 
-- successful initial investigation: preferably 2–5 concise findings;
-- focused follow-up: 1–3 findings;
-- UNAVAILABLE may contain zero findings;
-- every finding, including interpretation, cites real evidence;
-- authoritative citations are structured `evidence_ids`, not `[E1]` text generated by the model.
+- begin with detector or derived-priority semantics;
+- state concrete supplied observations directly;
+- place cautious multi-fact synthesis in `patterns`;
+- use `limits` for unavailable context;
+- never output encoded `ev2.*` identifiers or short evidence labels.
 
-## 8. Evidence validation
+## 8. Runtime trust boundary
 
-For one run define:
-
-```text
-AVAILABLE_EVIDENCE =
-  seed evidence generated by the application
-  + evidence IDs returned by successful MCP calls in this run
-```
-
-After model output:
-
-1. validate schema;
-2. validate each finding category;
-3. require non-empty evidence IDs for every finding;
-4. require every cited ID in `AVAILABLE_EVIDENCE` (seed evidence or a successful MCP result from this run);
-5. parse/decode each self-resolving Evidence V2 ID and verify its full SHA-256 checksum and canonical form;
-6. resolve the embedded authoritative context through the deterministic domain;
-7. recompute the evidence from its type/subject/context/normalized parameters and regenerate/verify the exact evidence ID;
-8. verify current-investigation subject/context/snapshot compatibility and no future/cross-context state;
-9. verify evidence type is runtime-safe.
-
-If any reference fails:
+The deterministic investigation packet is the trust boundary:
 
 ```text
-run_status = EVIDENCE_VALIDATION_FAILED
+deterministic Trailsight domain
+  -> hidden-label firewall
+  -> bounded application-owned investigation packet
+  -> model and seven scoped MCP tools
+  -> InvestigationSummaryV2 schema parse
+  -> deterministic GARG band-alignment guard
+  -> frontend
 ```
 
-Reject the **entire generated output**. Do not salvage individual findings, automatically repair citations, or ask another model to fix them in MVP.
-
-After validation, FastAPI deterministically assigns UI labels:
-
-```text
-first distinct evidence -> E1
-second -> E2
-...
-```
-
-The frontend renders those labels and focuses the application-owned evidence on click.
+There is no post-generation evidence-ID re-resolution, evidence regeneration, subject/context comparison over model citations, or display-evidence reconstruction. After structural parsing, one narrow deterministic guard compares the generated interpretation with the authoritative GARG band already present in the packet. HIGH, MEDIUM, LOW, and UNSCORED each require an aligned conclusion. LOW output additionally rejects contrast pivots and competing concern language, and requires plain support for limited spread, stable behavior, or established relationships. A violation is not displayed and records `BAND_ALIGNMENT_FAILED`. Evidence V2 remains authoritative for deterministic details, REST resolution, supporting-evidence UI, historical integrity, MCP/domain evidence, and analyst drill-down.
 
 ## 9. Abstention and failure behavior
 
@@ -271,8 +238,8 @@ Examples:
 Return:
 
 ```text
-status = UNAVAILABLE
-findings = []
+run_status = UNAVAILABLE
+summary = specific bounded response
 limits = [specific unavailable-data / prohibited-conclusion explanation]
 ```
 
@@ -288,9 +255,9 @@ If enough evidence remains, output may be PARTIAL; otherwise tool/AI unavailable
 
 Reject. Do not render a free-text fallback.
 
-### Evidence validation failure
+### GARG band-alignment failure
 
-Reject full investigation and record failure.
+Reject the generated investigation, render no conflicting prose, and record `BAND_ALIGNMENT_FAILED` with `validation_status=FAILED`.
 
 ### Timeout
 
@@ -298,7 +265,7 @@ Use one bounded runtime timeout. Do not add elaborate automatic retry/remediatio
 
 ## 10. Runtime observability
 
-Reuse V1 JSONL philosophy.
+Write one sanitized JSONL record per handled V2 AI run where possible.
 
 One trace per AI run:
 
@@ -358,7 +325,6 @@ Switch models by environment/config and run the same eval suite:
 ```text
 Model A + Prompt v1
 Model B + Prompt v1
-Prompt v2 + chosen model
 ```
 
 Record exact model string in every trace/result.
@@ -367,7 +333,13 @@ If pricing is configured by environment, compute approximate cost from usage. If
 
 ## 12. Runtime AI eval harness
 
-Reuse the V1 eval-harness pattern but replace all V1 case/TransXion semantics.
+The checked-in credential-free release-candidate harness is:
+
+```bash
+uv run python evals/v2/run_non_live.py
+```
+
+It loads `evals/v2/scenarios.yaml`, executes all 15 deterministic scenario definitions through an independent mocked observation path, and validates their structural/tool/evidence/wording expectations, required supplied values, multi-fact synthesis, and absence of explicitly unavailable facts. It does not make a paid model call. Credentialed real-model acceptance remains a separate user step.
 
 Required V2 baseline:
 
@@ -378,14 +350,14 @@ Recommended required mix:
 ### Alert/account investigations — 5
 
 1. HIGH alert explanation with detector + network evidence.
-2. Account direct browse with HIGH state but no criminal conclusion.
+2. Account direct browse with HIGH top-1% semantics, concrete supplied values, and no criminal conclusion.
 3. MEDIUM account direct investigation (no alert claim).
 4. UNSCORED account / insufficient network context.
 5. Historical alert where future account state differs, proving point-in-time wording.
 
 ### Transaction investigations — 5
 
-6. HIGH transaction because sender HIGH.
+6. HIGH transaction because sender HIGH, explicitly distinguishing endpoint-derived priority from direct GARG scoring.
 7. MEDIUM transaction from MEDIUM+LOW.
 8. UNSCORED transaction from LOW+UNSCORED.
 9. cross-currency + amount/relationship evidence, requiring behavioral tool selection.
@@ -397,7 +369,7 @@ Recommended required mix:
 12. “Where does the customer live?” -> bank-country qualification.
 13. request transaction purpose/source of funds -> unavailable.
 14. ask for IBM label/pattern -> unavailable + no leakage.
-15. ask broad “why prioritized?” where calling all seven tools is unnecessary -> tool-efficiency assertion.
+15. bounded follow-up identifying the most useful multi-fact pattern and an analyst attention point without inventing facts.
 
 Optional 16–20 can cover more network truncation, re-entry alerts, new counterparty, rapid flow-through, and a model-comparison case.
 
@@ -419,6 +391,8 @@ expected_output_categories[]
 expected_priority_explanation nullable
 forbidden_claims[]
 required_wording_constraints[]
+required_fact_tokens[]
+forbidden_fact_tokens[]
 max_tool_calls
 expected_status
 ```
@@ -443,9 +417,9 @@ Did the model retrieve the evidence needed?
 
 Did it avoid redundant/unrelated tools?
 
-### Evidence validity
+### Packet and tool validity
 
-Production evidence validator must pass. Target: **100%**.
+All concrete values must be available in the deterministic packet or successful bounded tool results. Evidence/value grounding remains an eval property rather than a runtime evidence validator. The separate runtime GARG band-alignment guard enforces only that the generated interpretation cannot dispute or recast the authoritative band.
 
 ### Factual support
 
@@ -453,7 +427,7 @@ Numbers, bands, cutoffs, relationships and priority reasons must agree with dete
 
 ### Detector-vs-fact distinction
 
-A finding must not describe an ordinary indicator as if it were the GARG scoring reason unless detector support directly supports that claim.
+Generated prose must not describe an ordinary indicator as if it were the GARG scoring reason unless detector support directly supports that claim.
 
 ### Priority correctness
 
@@ -479,7 +453,7 @@ No runtime/eval model input contains hidden benchmark truth.
 
 ## 15. Semantic support judge
 
-A small optional judge model may classify a finding against its exact deterministic evidence:
+A small optional offline judge model may classify a generated statement against the supplied deterministic packet:
 
 ```text
 SUPPORTED
@@ -488,7 +462,7 @@ UNSUPPORTED
 OVERCLAIM
 ```
 
-The judge receives only runtime-safe evidence, not hidden labels.
+The judge receives only runtime-safe packet data, not hidden labels. It is an evaluation aid and is never a runtime display gate.
 
 Deterministic failures always override judge approval:
 

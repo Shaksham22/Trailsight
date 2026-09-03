@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--database",
         type=Path,
         default=Path("data/v2/runtime/trailsight_v2.duckdb"),
-        help="WP01 runtime-safe DuckDB to extend atomically with WP02 outputs",
+        help="runtime-safe DuckDB to extend atomically with detector outputs",
     )
     parser.add_argument("--workers", type=int, default=1)
     return parser
@@ -37,4 +37,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

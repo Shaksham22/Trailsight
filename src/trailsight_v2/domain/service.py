@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -87,6 +88,12 @@ MAX_LIST_QUERY_TEXT = 256
 TRANSACTION_ACTIVITY_DAYS = 30
 
 
+@dataclass(frozen=True, slots=True)
+class _TransactionBehavioralBundle:
+    indicators: BehavioralIndicatorsV2
+    evidence: tuple[EvidenceV2, ...]
+
+
 
 class InvestigationServiceV2:
     """Sole factual facade used by later REST, MCP, AI validation, and UI APIs."""
@@ -99,11 +106,15 @@ class InvestigationServiceV2:
 
     def list_alerts(self, request: AlertListRequestV2 | None = None) -> AlertListPageV2:
         request = request or AlertListRequestV2()
+        q = request.q.strip() if request.q is not None else None
+        self._validate_query_text(q)
+        q = q or None
         include_refs = self._normalize_alert_membership(request.include_alert_refs)
         exclude_refs = self._normalize_alert_membership(request.exclude_alert_refs)
         rows, next_cursor, has_more = self._repository.list_alert_rows(
             cursor=request.cursor,
             limit=request.limit,
+            q=q,
             bank_country=request.bank_country,
             include_alert_refs=include_refs,
             exclude_alert_refs=exclude_refs,
@@ -157,54 +168,8 @@ class InvestigationServiceV2:
             sending_bank_country=request.sending_bank_country,
             receiving_bank_country=request.receiving_bank_country,
         )
-        items: list[TransactionListItemV2] = []
-        for row in rows:
-            try:
-                priority = NetworkReviewBand(str(row[23]))
-            except ValueError as exc:
-                raise DataIntegrityError(
-                    "Transaction list contains an unknown persisted AML review priority"
-                ) from exc
-            items.append(
-                TransactionListItemV2(
-                    transaction_ref=str(row[0]),
-                    timestamp=self._ts(row[1]),
-                    sender=TransactionListPartyV2(
-                        account_ref=str(row[2]),
-                        bank_id=str(row[3]),
-                        account_id=str(row[4]),
-                        bank_country=BankCountryV2(
-                            bank_id=str(row[3]),
-                            mapping_version=str(row[5]),
-                            country_name=str(row[6]),
-                            iso_alpha2=str(row[7]),
-                            centroid_latitude=float(row[8]),
-                            centroid_longitude=float(row[9]),
-                        ),
-                    ),
-                    receiver=TransactionListPartyV2(
-                        account_ref=str(row[10]),
-                        bank_id=str(row[11]),
-                        account_id=str(row[12]),
-                        bank_country=BankCountryV2(
-                            bank_id=str(row[11]),
-                            mapping_version=str(row[13]),
-                            country_name=str(row[14]),
-                            iso_alpha2=str(row[15]),
-                            centroid_latitude=float(row[16]),
-                            centroid_longitude=float(row[17]),
-                        ),
-                    ),
-                    amount_paid=canonical_decimal(row[18]),
-                    payment_currency=str(row[19]),
-                    amount_received=canonical_decimal(row[20]),
-                    receiving_currency=str(row[21]),
-                    payment_format=str(row[22]),
-                    aml_review_priority=priority,
-                    related_alert=self._str_or_none(row[24]),
-                )
-            )
-        return TransactionListPageV2(items=tuple(items), next_cursor=next_cursor, has_more=has_more)
+        items = tuple(self._transaction_list_item(row) for row in rows)
+        return TransactionListPageV2(items=items, next_cursor=next_cursor, has_more=has_more)
 
     def list_accounts(self, request: AccountListRequestV2 | None = None) -> AccountListPageV2:
         request = request or AccountListRequestV2()
@@ -316,62 +281,105 @@ class InvestigationServiceV2:
         )
 
     def get_transaction_detail(self, transaction_ref: str) -> TransactionDetailV2:
-        context = self._context_for_transaction(transaction_ref)
-        facts = self._transaction_facts(transaction_ref)
-        review = self._transaction_review_state(transaction_ref)
+        context, facts, review = self._transaction_context_bundle(transaction_ref)
         route = self._bank_country_route(facts)
-        indicators = self.get_behavioral_indicators(
-            SubjectType.TRANSACTION, transaction_ref, context=context
-        )
-        evidences = [
-            self._make_evidence(
+        behavioral = self._transaction_behavioral_bundle(facts, context)
+        indicators = behavioral.indicators
+        evidences = (
+            self._evidence_from_authoritative_parts(
                 EvidenceType.TRANSACTION_FACTS,
                 SubjectType.TRANSACTION,
                 transaction_ref,
-                context.context_identity,
+                context,
                 {},
+                facts,
+                [transaction_ref],
+                1,
+                "selected-transaction-v1",
+                UITargetV2.TRANSACTION_FACTS,
             ),
-            self._make_evidence(
+            self._evidence_from_authoritative_parts(
                 EvidenceType.TRANSACTION_PRIORITY,
                 SubjectType.TRANSACTION,
                 transaction_ref,
-                context.context_identity,
+                context,
                 {},
+                review,
+                [transaction_ref],
+                1,
+                "selected-transaction-v1",
+                UITargetV2.REVIEW_PRIORITY,
             ),
-            self._make_evidence(
+            self._evidence_from_authoritative_parts(
                 EvidenceType.BANK_COUNTRY_ROUTE,
                 SubjectType.TRANSACTION,
                 transaction_ref,
-                context.context_identity,
+                context,
                 {},
+                route,
+                [transaction_ref],
+                1,
+                "selected-transaction-v1",
+                UITargetV2.BANK_COUNTRY_ROUTE,
             ),
-        ]
+        )
         sender_card = self._endpoint_account_card(
-            facts.sender, context, Direction.OUTGOING
+            facts.sender,
+            context,
+            Direction.OUTGOING,
+            behavior=indicators.account_network_behavior[facts.sender.account_ref],
         )
         receiver_card = self._endpoint_account_card(
-            facts.receiver, context, Direction.INCOMING
+            facts.receiver,
+            context,
+            Direction.INCOMING,
+            behavior=indicators.account_network_behavior[facts.receiver.account_ref],
         )
-        investigation_indicators = self._transaction_investigation_indicators(indicators)
+        investigation_indicators = self._transaction_investigation_indicators(
+            indicators, behavioral.evidence
+        )
         activity_context = self._transaction_activity_context(facts, context)
         local_network_summary = LocalNetworkSummaryV2(
-            sender=self.get_account_network(facts.sender.account_ref, context=context),
-            receiver=self.get_account_network(facts.receiver.account_ref, context=context),
+            sender=self._account_network_from_resolved(
+                facts.sender, facts.receiver.account_ref, context
+            ),
+            receiver=self._account_network_from_resolved(
+                facts.receiver, facts.sender.account_ref, context
+            ),
         )
-        summary_ids: list[str] = []
+        evidence_by_id = {
+            item.evidence_id: item for item in (*evidences, *behavioral.evidence)
+        }
+        summary_evidence: list[EvidenceV2] = []
         seen_ids: set[str] = set()
         for evidence_id in [
             *(item.evidence_id for item in evidences),
             *(item.evidence_id for item in investigation_indicators),
         ]:
             if evidence_id not in seen_ids:
-                summary_ids.append(evidence_id)
+                summary_evidence.append(evidence_by_id[evidence_id])
                 seen_ids.add(evidence_id)
+        support_refs = list(
+            dict.fromkeys(
+                ref
+                for evidence in summary_evidence
+                for ref in evidence.supporting_transaction_refs
+            )
+        )
+        support_rows = self._repository.supporting_transaction_rows(
+            support_refs,
+            max_refs=SUPPORT_LIMIT * len(summary_evidence),
+        )
+        support_by_ref = {str(row[0]): row for row in support_rows}
         supporting_evidence_summary = tuple(
             self._supporting_evidence_summary_item(
-                self.display_evidence(evidence_id), f"E{index}"
+                self._display_evidence_from_rows(
+                    evidence,
+                    [support_by_ref[ref] for ref in evidence.supporting_transaction_refs],
+                ),
+                f"E{index}",
             )
-            for index, evidence_id in enumerate(summary_ids, 1)
+            for index, evidence in enumerate(summary_evidence, 1)
         )
         return TransactionDetailV2(
             context=context,
@@ -399,7 +407,7 @@ class InvestigationServiceV2:
         activity_over_time = tuple(self._activity_buckets(account_ref, context))
         currency_activity = self._currency_activity(activity_over_time)
         flows = tuple(self._bank_country_flows(account_ref, context))
-        history = tuple(self._alert_history(account_ref, context))
+        history, history_total = self._alert_history(account_ref, context)
         evidence_ids = (
             self._make_evidence(
                 EvidenceType.DETECTOR_STATE,
@@ -432,7 +440,9 @@ class InvestigationServiceV2:
             activity_over_time=activity_over_time,
             currency_activity=currency_activity,
             bank_country_flows=flows,
-            alert_history=history,
+            alert_history=tuple(history),
+            alert_history_total=history_total,
+            alert_history_truncated=history_total > len(history),
             evidence_ids=evidence_ids,
         )
 
@@ -462,7 +472,7 @@ class InvestigationServiceV2:
             cursor=cursor,
         )
         return AccountTransactionPageV2(
-            items=tuple(self._supporting_transaction(row) for row in rows),
+            items=tuple(self._transaction_list_item(row) for row in rows),
             next_cursor=next_cursor,
             has_more=has_more,
         )
@@ -476,21 +486,27 @@ class InvestigationServiceV2:
     ) -> AccountNetworkV2:
         context = context or self.resolve_context(SubjectType.ACCOUNT, account_ref, origin_ref)
         self._validate_account_in_context(account_ref, context)
-        context_time = parse_canonical_timestamp(context.context_time)
         selected_cp = self._selected_counterparty(account_ref, context)
+        root = self._account_identity(account_ref)
+        return self._account_network_from_resolved(root, selected_cp, context)
+
+    def _account_network_from_resolved(
+        self,
+        root: AccountIdentityV2,
+        selected_cp: str | None,
+        context: InvestigationContextV2,
+    ) -> AccountNetworkV2:
+        account_ref = root.account_ref
+        self._validate_account_in_context(account_ref, context)
+        context_time = parse_canonical_timestamp(context.context_time)
         historical_count = self._repository.network_counterparty_count(account_ref, context_time)
         selected_row: tuple[Any, ...] | None = None
         selected_is_historical = False
         if selected_cp is not None and selected_cp != account_ref:
-            aggregate = self._repository.relationship_row(account_ref, selected_cp, context_time)
-            if int(aggregate[0] or 0) > 0:
-                selected_is_historical = True
-                selected_row = (
-                    selected_cp, int(aggregate[2] or 0), int(aggregate[1] or 0), int(aggregate[0] or 0),
-                    aggregate[3], aggregate[4],
-                )
-            else:
-                selected_row = (selected_cp, 0, 0, 0, None, None)
+            selected_row = self._repository.network_relationship_row(
+                account_ref, selected_cp, context_time
+            )
+            selected_is_historical = int(selected_row[11] or 0) > 0
         reserve = 1 if selected_row is not None else 0
         historical_rows = self._repository.network_rows(
             account_ref, context_time, limit=NETWORK_LIMIT - reserve,
@@ -500,23 +516,10 @@ class InvestigationServiceV2:
         if selected_row is not None:
             rows.append(selected_row)
         rows.extend(historical_rows)
-        relationships: list[NetworkRelationshipV2] = []
-        for row in rows:
-            cp_ref, incoming, outgoing, total, first_ts, last_ts = row
-            relationships.append(
-                NetworkRelationshipV2(
-                    counterparty=self._account_identity(str(cp_ref)),
-                    incoming_count=int(incoming or 0),
-                    outgoing_count=int(outgoing or 0),
-                    total_count=int(total or 0),
-                    first_historical_timestamp=self._ts_or_none(first_ts),
-                    last_historical_timestamp=self._ts_or_none(last_ts),
-                    selected_relationship=str(cp_ref) == selected_cp,
-                )
-            )
+        relationships = [self._network_relationship(row, selected_cp) for row in rows]
         total_counterparties = historical_count + (1 if selected_row is not None and not selected_is_historical else 0)
         return AccountNetworkV2(
-            root=self._account_identity(account_ref),
+            root=root,
             context=context.context_identity,
             total_direct_counterparties=total_counterparties,
             shown_counterparties=len(relationships),
@@ -537,77 +540,132 @@ class InvestigationServiceV2:
             subject_type = SubjectType(subject_type)
         except ValueError as exc:
             raise InvalidInputError("Unknown investigation subject type") from exc
-        context = context or self.resolve_context(subject_type, subject_ref, origin_ref)
-        evidence_ids: list[str] = []
-        behaviors: dict[str, NetworkBehaviorV2] = {}
-        sender_amount = receiver_amount = None
-        relationship = None
-        currency = None
         if subject_type is SubjectType.TRANSACTION:
-            facts = self._transaction_facts(subject_ref)
-            sender_amount = self._amount_behavior(facts, AmountSide.SENDER_PAID, context)
-            receiver_amount = self._amount_behavior(facts, AmountSide.RECEIVER_RECEIVED, context)
-            relationship = self._relationship(
-                facts.sender.account_ref, facts.receiver.account_ref, context
-            )
-            currency = CurrencyBehaviorV2(
-                transaction_ref=facts.transaction_ref,
-                cross_currency=facts.cross_currency,
-                currency_pair=facts.currency_pair,
-            )
-            for root in context.root_account_refs:
-                behaviors[root] = self._network_behavior(root, context)
-            for side in (AmountSide.SENDER_PAID, AmountSide.RECEIVER_RECEIVED):
-                evidence_ids.append(
-                    self._make_evidence(
-                        EvidenceType.AMOUNT_BEHAVIOR,
-                        SubjectType.TRANSACTION,
-                        subject_ref,
-                        context.context_identity,
-                        {"side": side.value},
-                    ).evidence_id
-                )
-            evidence_ids.append(
-                self._make_evidence(
-                    EvidenceType.COUNTERPARTY_RELATIONSHIP,
-                    SubjectType.ACCOUNT,
-                    facts.sender.account_ref,
-                    context.context_identity,
-                    {"counterparty_ref": facts.receiver.account_ref},
-                ).evidence_id
-            )
-            evidence_ids.append(
-                self._make_evidence(
-                    EvidenceType.CURRENCY_BEHAVIOR,
+            if context is None:
+                context, facts, _ = self._transaction_context_bundle(subject_ref)
+            else:
+                facts = self._transaction_facts(subject_ref)
+            return self._transaction_behavioral_bundle(facts, context).indicators
+
+        context = context or self.resolve_context(subject_type, subject_ref, origin_ref)
+        root = account_ref or (
+            context.root_account_refs[0] if context.root_account_refs else subject_ref
+        )
+        self._validate_account_in_context(root, context)
+        behavior = self._network_behavior(root, context)
+        evidence = self._make_evidence(
+            EvidenceType.NETWORK_BEHAVIOR,
+            SubjectType.ACCOUNT,
+            root,
+            context.context_identity,
+            {},
+        )
+        return BehavioralIndicatorsV2(
+            context=context.context_identity,
+            account_network_behavior={root: behavior},
+            evidence_ids=(evidence.evidence_id,),
+        )
+
+    def _transaction_behavioral_bundle(
+        self, facts: TransactionFactsV2, context: InvestigationContextV2
+    ) -> _TransactionBehavioralBundle:
+        context_time = parse_canonical_timestamp(context.context_time)
+        sender_amount = self._amount_behavior(facts, AmountSide.SENDER_PAID, context)
+        receiver_amount = self._amount_behavior(
+            facts, AmountSide.RECEIVER_RECEIVED, context
+        )
+        relationship = self._relationship(
+            facts.sender.account_ref, facts.receiver.account_ref, context
+        )
+        currency = CurrencyBehaviorV2(
+            transaction_ref=facts.transaction_ref,
+            cross_currency=facts.cross_currency,
+            currency_pair=facts.currency_pair,
+        )
+        behaviors = {
+            root: self._network_behavior(root, context)
+            for root in context.root_account_refs
+        }
+
+        evidence: list[EvidenceV2] = []
+        for side, amount in (
+            (AmountSide.SENDER_PAID, sender_amount),
+            (AmountSide.RECEIVER_RECEIVED, receiver_amount),
+        ):
+            evidence.append(
+                self._evidence_from_authoritative_parts(
+                    EvidenceType.AMOUNT_BEHAVIOR,
                     SubjectType.TRANSACTION,
-                    subject_ref,
-                    context.context_identity,
-                    {},
-                ).evidence_id
+                    facts.transaction_ref,
+                    context,
+                    {"side": side.value},
+                    amount,
+                    self._repository.support_refs_for_amount(
+                        account_ref=amount.account_ref,
+                        context_time=context_time,
+                        side=side.value,
+                        currency=amount.currency,
+                    ),
+                    amount.sample_size,
+                    "most-recent-same-side-currency-v1",
+                    UITargetV2.INVESTIGATION_INDICATORS,
+                )
             )
-        else:
-            root = account_ref or (context.root_account_refs[0] if context.root_account_refs else subject_ref)
-            self._validate_account_in_context(root, context)
-            behaviors[root] = self._network_behavior(root, context)
-        for root in behaviors:
-            evidence_ids.append(
-                self._make_evidence(
+        evidence.append(
+            self._evidence_from_authoritative_parts(
+                EvidenceType.COUNTERPARTY_RELATIONSHIP,
+                SubjectType.ACCOUNT,
+                facts.sender.account_ref,
+                context,
+                {"counterparty_ref": facts.receiver.account_ref},
+                relationship,
+                self._repository.support_refs_for_relationship(
+                    facts.sender.account_ref, facts.receiver.account_ref, context_time
+                ),
+                relationship.previous_interaction_count,
+                "most-recent-relationship-v1",
+                UITargetV2.COUNTERPARTY_TABLE,
+            )
+        )
+        evidence.append(
+            self._evidence_from_authoritative_parts(
+                EvidenceType.CURRENCY_BEHAVIOR,
+                SubjectType.TRANSACTION,
+                facts.transaction_ref,
+                context,
+                {},
+                currency,
+                [facts.transaction_ref],
+                1,
+                "selected-transaction-v1",
+                UITargetV2.CURRENCY_ACTIVITY,
+            )
+        )
+        for root, behavior in behaviors.items():
+            evidence.append(
+                self._evidence_from_authoritative_parts(
                     EvidenceType.NETWORK_BEHAVIOR,
                     SubjectType.ACCOUNT,
                     root,
-                    context.context_identity,
+                    context,
                     {},
-                ).evidence_id
+                    behavior,
+                    self._repository.support_refs_for_network_behavior(root, context_time),
+                    behavior.velocity_24h.total_count,
+                    "most-recent-prior-24h-v1",
+                    UITargetV2.ACCOUNT_NETWORK,
+                )
             )
-        return BehavioralIndicatorsV2(
+        indicators = BehavioralIndicatorsV2(
             context=context.context_identity,
             sender_amount_behavior=sender_amount,
             receiver_amount_behavior=receiver_amount,
             counterparty_relationship=relationship,
             account_network_behavior=behaviors,
             cross_currency=currency,
-            evidence_ids=tuple(evidence_ids),
+            evidence_ids=tuple(item.evidence_id for item in evidence),
         )
+        return _TransactionBehavioralBundle(indicators=indicators, evidence=tuple(evidence))
 
     def get_relationship_context(
         self,
@@ -700,6 +758,12 @@ class InvestigationServiceV2:
         )
 
     def _context_for_transaction(self, transaction_ref: str) -> InvestigationContextV2:
+        context, _, _ = self._transaction_context_bundle(transaction_ref)
+        return context
+
+    def _transaction_context_bundle(
+        self, transaction_ref: str
+    ) -> tuple[InvestigationContextV2, TransactionFactsV2, TransactionReviewStateV2]:
         facts = self._transaction_facts(transaction_ref)
         review = self._transaction_review_state(transaction_ref)
         context_dt = parse_canonical_timestamp(facts.transaction_timestamp)
@@ -723,7 +787,7 @@ class InvestigationServiceV2:
             context_time=facts.transaction_timestamp,
             snapshot_id=snapshot_id,
         )
-        return InvestigationContextV2(
+        context = InvestigationContextV2(
             subject_type=SubjectType.TRANSACTION,
             subject_ref=transaction_ref,
             context_identity=identity,
@@ -733,6 +797,7 @@ class InvestigationServiceV2:
             root_account_refs=(facts.sender.account_ref, facts.receiver.account_ref),
             selected_transaction_ref=transaction_ref,
         )
+        return context, facts, review
 
     def _context_for_latest_account(self, account_ref: str) -> InvestigationContextV2:
         self._account_identity(account_ref)
@@ -903,12 +968,14 @@ class InvestigationServiceV2:
     def _detector_state_evidence_facts(
         self, snapshot_id: str, account_ref: str
     ) -> DetectorStateEvidenceFactsV2:
+        snapshot = self._snapshot(snapshot_id)
         state = self._account_detector_state(snapshot_id, account_ref)
         support = self._detector_support(snapshot_id, account_ref)
         return DetectorStateEvidenceFactsV2(
             snapshot_id=state.snapshot_id,
             account_ref=state.account_ref,
             scoring_eligible=state.scoring_eligible,
+            eligible_account_count=snapshot.eligible_account_count,
             network_pattern_score=state.network_pattern_score,
             rank=state.rank,
             percentile=state.percentile,
@@ -1039,11 +1106,13 @@ class InvestigationServiceV2:
         account: AccountIdentityV2,
         context: InvestigationContextV2,
         primary_direction: Direction,
+        *,
+        behavior: NetworkBehaviorV2 | None = None,
     ) -> EndpointAccountCardV2:
         if context.detector_snapshot_id is None or context.detector_cutoff is None:
             raise DataIntegrityError("Transaction context has no applicable detector snapshot")
         state = self._account_detector_state(context.detector_snapshot_id, account.account_ref)
-        behavior = self._network_behavior(account.account_ref, context)
+        behavior = behavior or self._network_behavior(account.account_ref, context)
         if primary_direction is Direction.OUTGOING:
             counterparty_count = behavior.fan_out_24h
             direction_text = "outgoing"
@@ -1064,11 +1133,12 @@ class InvestigationServiceV2:
         )
 
     def _transaction_investigation_indicators(
-        self, indicators: BehavioralIndicatorsV2
+        self,
+        indicators: BehavioralIndicatorsV2,
+        evidence_items: tuple[EvidenceV2, ...],
     ) -> tuple[InvestigationIndicatorV2, ...]:
         resolved: dict[tuple[EvidenceType, str, str], EvidenceV2] = {}
-        for evidence_id in indicators.evidence_ids:
-            evidence = self.resolve_evidence(evidence_id)
+        for evidence in evidence_items:
             side = str(evidence.parameters.get("side", ""))
             resolved[(evidence.evidence_type, evidence.subject_ref, side)] = evidence
 
@@ -1361,17 +1431,20 @@ class InvestigationServiceV2:
 
     def _alert_history(
         self, account_ref: str, context: InvestigationContextV2
-    ) -> list[AlertHistoryItemV2]:
-        rows = self._repository.alert_history_rows(
+    ) -> tuple[list[AlertHistoryItemV2], int]:
+        rows, total = self._repository.alert_history_rows(
             account_ref, parse_canonical_timestamp(context.context_time)
         )
-        return [
-            AlertHistoryItemV2(
-                alert_ref=str(row[0]), entry_snapshot_id=str(row[1]),
-                entry_cutoff=self._ts(row[2]), reason_code=str(row[3]),
-            )
-            for row in rows
-        ]
+        return (
+            [
+                AlertHistoryItemV2(
+                    alert_ref=str(row[0]), entry_snapshot_id=str(row[1]),
+                    entry_cutoff=self._ts(row[2]), reason_code=str(row[3]),
+                )
+                for row in rows
+            ],
+            total,
+        )
 
     # ---------- Evidence ----------
 
@@ -1389,6 +1462,34 @@ class InvestigationServiceV2:
         facts, support_refs, support_total, selection_rule, ui_target = self._evidence_facts(
             evidence_type, subject_type, subject_ref, context, parameters
         )
+        return self._evidence_from_authoritative_parts(
+            evidence_type,
+            subject_type,
+            subject_ref,
+            context,
+            parameters,
+            facts,
+            support_refs,
+            support_total,
+            selection_rule,
+            ui_target,
+        )
+
+    def _evidence_from_authoritative_parts(
+        self,
+        evidence_type: EvidenceType,
+        subject_type: SubjectType,
+        subject_ref: str,
+        context: InvestigationContextV2,
+        parameters: dict[str, Any],
+        facts: Any,
+        support_refs: list[str] | tuple[str, ...],
+        support_total: int,
+        selection_rule: str,
+        ui_target: UITargetV2,
+    ) -> EvidenceV2:
+        parameters = canonical_parameters(parameters)
+        self._validate_resolved_subject_context(subject_type, subject_ref, context)
         identity = EvidenceIdentityV2(
             evidence_type=evidence_type, subject_type=subject_type, subject_ref=subject_ref,
             context_identity=context.context_identity, parameters=parameters,
@@ -1534,6 +1635,11 @@ class InvestigationServiceV2:
 
     def _display_evidence(self, evidence: EvidenceV2) -> DisplayEvidenceV2:
         rows = self._repository.supporting_transaction_rows(evidence.supporting_transaction_refs)
+        return self._display_evidence_from_rows(evidence, rows)
+
+    def _display_evidence_from_rows(
+        self, evidence: EvidenceV2, rows: list[tuple[Any, ...]]
+    ) -> DisplayEvidenceV2:
         return DisplayEvidenceV2(
             evidence_id=evidence.evidence_id, evidence_type=evidence.evidence_type,
             subject_type=evidence.subject_type, subject_ref=evidence.subject_ref,
@@ -1555,16 +1661,34 @@ class InvestigationServiceV2:
     def _validate_subject_context(
         self, subject_type: SubjectType, subject_ref: str, context: InvestigationContextV2
     ) -> None:
+        self._validate_resolved_subject_context(subject_type, subject_ref, context)
         if subject_type is SubjectType.ALERT:
-            if context.context_identity.context_kind is not ContextKind.ALERT_ENTRY or context.alert_ref != subject_ref:
-                raise InvalidContextError("Alert evidence is outside its authoritative entry context")
             self._alert_facts(subject_ref)
         elif subject_type is SubjectType.TRANSACTION:
-            if context.context_identity.context_kind is not ContextKind.TRANSACTION or context.selected_transaction_ref != subject_ref:
-                raise InvalidContextError("Transaction evidence is outside its authoritative transaction context")
             self._transaction_facts(subject_ref)
         else:
             self._account_identity(subject_ref)
+
+    def _validate_resolved_subject_context(
+        self, subject_type: SubjectType, subject_ref: str, context: InvestigationContextV2
+    ) -> None:
+        if subject_type is SubjectType.ALERT:
+            if (
+                context.context_identity.context_kind is not ContextKind.ALERT_ENTRY
+                or context.alert_ref != subject_ref
+            ):
+                raise InvalidContextError(
+                    "Alert evidence is outside its authoritative entry context"
+                )
+        elif subject_type is SubjectType.TRANSACTION:
+            if (
+                context.context_identity.context_kind is not ContextKind.TRANSACTION
+                or context.selected_transaction_ref != subject_ref
+            ):
+                raise InvalidContextError(
+                    "Transaction evidence is outside its authoritative transaction context"
+                )
+        else:
             self._validate_account_in_context(subject_ref, context)
 
     def _validate_account_in_context(
@@ -1602,13 +1726,92 @@ class InvestigationServiceV2:
         raise InvalidContextError("Selected transaction does not involve requested root account")
 
     @staticmethod
+    def _transaction_list_item(row: tuple[Any, ...]) -> TransactionListItemV2:
+        try:
+            priority = NetworkReviewBand(str(row[23]))
+        except ValueError as exc:
+            raise DataIntegrityError(
+                "Transaction list contains an unknown persisted AML review priority"
+            ) from exc
+        return TransactionListItemV2(
+            transaction_ref=str(row[0]),
+            timestamp=InvestigationServiceV2._ts(row[1]),
+            sender=TransactionListPartyV2(
+                account_ref=str(row[2]),
+                bank_id=str(row[3]),
+                account_id=str(row[4]),
+                bank_country=BankCountryV2(
+                    bank_id=str(row[3]), mapping_version=str(row[5]),
+                    country_name=str(row[6]), iso_alpha2=str(row[7]),
+                    centroid_latitude=float(row[8]), centroid_longitude=float(row[9]),
+                ),
+            ),
+            receiver=TransactionListPartyV2(
+                account_ref=str(row[10]),
+                bank_id=str(row[11]),
+                account_id=str(row[12]),
+                bank_country=BankCountryV2(
+                    bank_id=str(row[11]), mapping_version=str(row[13]),
+                    country_name=str(row[14]), iso_alpha2=str(row[15]),
+                    centroid_latitude=float(row[16]), centroid_longitude=float(row[17]),
+                ),
+            ),
+            amount_paid=canonical_decimal(row[18]),
+            payment_currency=str(row[19]),
+            amount_received=canonical_decimal(row[20]),
+            receiving_currency=str(row[21]),
+            payment_format=str(row[22]),
+            aml_review_priority=priority,
+            related_alert=InvestigationServiceV2._str_or_none(row[24]),
+        )
+
+    @staticmethod
+    def _network_relationship(
+        row: tuple[Any, ...], selected_counterparty_ref: str | None
+    ) -> NetworkRelationshipV2:
+        counterparty_ref = str(row[0])
+        return NetworkRelationshipV2(
+            counterparty=AccountIdentityV2(
+                account_ref=counterparty_ref,
+                source_dataset=str(row[1]),
+                bank_id=str(row[2]),
+                account_id=str(row[3]),
+                bank_country=BankCountryV2(
+                    bank_id=str(row[2]), mapping_version=str(row[4]),
+                    country_name=str(row[5]), iso_alpha2=str(row[6]),
+                    centroid_latitude=float(row[7]), centroid_longitude=float(row[8]),
+                ),
+            ),
+            incoming_count=int(row[9] or 0),
+            outgoing_count=int(row[10] or 0),
+            total_count=int(row[11] or 0),
+            first_historical_timestamp=InvestigationServiceV2._ts_or_none(row[12]),
+            last_historical_timestamp=InvestigationServiceV2._ts_or_none(row[13]),
+            selected_relationship=counterparty_ref == selected_counterparty_ref,
+        )
+
+    @staticmethod
     def _supporting_transaction(row: tuple[Any, ...]) -> SupportingTransactionV2:
+        item = InvestigationServiceV2._transaction_list_item(row)
         return SupportingTransactionV2(
-            transaction_ref=str(row[0]), transaction_timestamp=InvestigationServiceV2._ts(row[1]),
-            from_account_ref=str(row[2]), from_bank_id=str(row[3]), to_account_ref=str(row[4]),
-            to_bank_id=str(row[5]), amount_paid=canonical_decimal(row[6]), payment_currency=str(row[7]),
-            amount_received=canonical_decimal(row[8]), receiving_currency=str(row[9]),
-            payment_format=str(row[10]), cross_currency=bool(row[11]),
+            transaction_ref=item.transaction_ref,
+            transaction_timestamp=item.timestamp,
+            from_account_ref=item.sender.account_ref,
+            from_bank_id=item.sender.bank_id,
+            from_account_id=item.sender.account_id,
+            from_bank_country=item.sender.bank_country,
+            to_account_ref=item.receiver.account_ref,
+            to_bank_id=item.receiver.bank_id,
+            to_account_id=item.receiver.account_id,
+            to_bank_country=item.receiver.bank_country,
+            amount_paid=item.amount_paid,
+            payment_currency=item.payment_currency,
+            amount_received=item.amount_received,
+            receiving_currency=item.receiving_currency,
+            payment_format=item.payment_format,
+            cross_currency=bool(row[25]),
+            aml_review_priority=item.aml_review_priority,
+            related_alert=item.related_alert,
         )
 
     @staticmethod

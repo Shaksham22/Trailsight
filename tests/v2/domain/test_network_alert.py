@@ -91,3 +91,33 @@ def test_network_ranking_is_deterministic_count_then_recency_then_ref(service_fa
     assert network.relationships[0].counterparty.account_ref == selected.to_ref
     assert network.relationships[1].counterparty.account_ref == account_ref_for("BB", "B")
     assert network.relationships[2].counterparty.account_ref == account_ref_for("BA", "A")
+
+
+def test_network_relationship_query_returns_counterparty_identities_without_per_row_lookup(
+    service_factory, root_ref, monkeypatch
+) -> None:
+    rows = [
+        TxSpec(
+            txref(index),
+            SELECTED_TIME - timedelta(minutes=index),
+            "B1",
+            "ROOT",
+            f"B{index + 20}",
+            f"CP{index}",
+        )
+        for index in range(1, 6)
+    ] + [selected_tx()]
+    service = service_factory(rows)
+    context = service.resolve_context(SubjectType.ACCOUNT, root_ref)
+    identity_reads = 0
+    original = service._repository.get_account_row
+
+    def counted_identity(account_ref: str):
+        nonlocal identity_reads
+        identity_reads += 1
+        return original(account_ref)
+
+    monkeypatch.setattr(service._repository, "get_account_row", counted_identity)
+    network = service.get_account_network(root_ref, context=context)
+    assert network.shown_counterparties == 6
+    assert identity_reads == 1  # root only; all counterparties came from the joined aggregate

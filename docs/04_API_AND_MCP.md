@@ -86,9 +86,12 @@ Query:
 ```text
 cursor?
 limit?
+q?                        # alert_ref, account_ref, account_id, or bank_id prefix
 review_status? = NOT_REVIEWED | IN_REVIEW | REVIEWED
 bank_country?
 ```
+
+`q` is bounded to 256 characters, trimmed, and treated as absent when blank/whitespace. Matching is deterministic prefix matching over `alert_ref`, canonical `account_ref`, `account_id`, and `bank_id`; it composes with review-status membership, Bank Country, and opaque cursor pagination.
 
 Response items:
 
@@ -138,6 +141,8 @@ updated_at
 
 This writes only the small workflow-state store. It never mutates detector outputs.
 
+Allowed V2 transitions are `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`. `REVIEWED` is deliberately terminal because the V2 runtime state has no workflow event/audit history needed for safe reopening.
+
 ## 5. Transactions API
 
 ### GET `/api/v2/transactions`
@@ -151,7 +156,7 @@ q?                         # transaction ref, account ID, or bank ID search
 priority?                  # HIGH | MEDIUM | LOW | UNSCORED
 alert_involvement?         # true | false
 date_from?                 # inclusive
-date_to?                  # exclusive or end-of-range by documented convention
+date_to?                  # exclusive upper bound
 currency?                  # matches payment OR receiving currency
 payment_format?
 sending_bank_country?
@@ -159,6 +164,8 @@ receiving_bank_country?
 ```
 
 `q` is bounded text input, not raw SQL. Search semantics:
+
+The analyst-facing date-only **To Date** control is inclusive. The frontend converts `YYYY-MM-DD` to the next day's `T00:00:00` exclusive `date_to` value, avoiding loss of transactions later on the selected day. An explicitly supplied timestamp remains the precise exclusive upper bound.
 
 - transaction ref exact/prefix;
 - account ID exact/prefix across sender/receiver;
@@ -197,6 +204,8 @@ activity_context
 local_network_summary
 supporting_evidence_summary
 ```
+
+Every bounded supporting transaction inside `supporting_evidence_summary` is display-ready and includes the authoritative sender/receiver identities and Bank Countries, AML Review Priority, related-alert reference, amounts/currencies, payment format, and cross-currency fact. Clients do not call full Transaction Detail once per supporting row.
 
 `review_state` includes:
 
@@ -269,8 +278,12 @@ observed_activity
 activity_over_time
 currency_activity
 bank_country_flows (bounded/optional)
-alert_history (bounded)
+alert_history (latest 100)
+alert_history_total
+alert_history_truncated
 ```
+
+`bank_country_flows` contains all aggregated Bank-Country connections for the resolved account/context in deterministic total-activity/ISO order; it has no arbitrary top-12 limit. Each returned `alert_history` item includes current mutable `review_status`. If more than 100 alerts exist, `alert_history_total` reports the complete count and `alert_history_truncated=true`.
 
 ### GET `/api/v2/accounts/{account_ref}/transactions`
 
@@ -285,6 +298,8 @@ counterparty_account_ref?
 ```
 
 Every row satisfies the resolved context cutoff.
+
+Response items use the display-ready transaction-list shape documented by `GET /api/v2/transactions`: transaction ref/timestamp, authoritative sender and receiver identities with Bank Countries, both amount/currency pairs, payment format, AML Review Priority, and related-alert reference. Account Detail must not hydrate these rows through per-row Transaction Detail requests.
 
 ### GET `/api/v2/accounts/{account_ref}/network`
 
@@ -328,7 +343,9 @@ origin_alert_ref: string | null
 origin_transaction_ref: string | null
 ```
 
-The server resolves authoritative context, allocates an `investigation_id`, and persists the minimal session mapping in `runtime_state.json` before/while starting the AI run. The persisted mapping contains only subject/origin/context identity, `follow_up_used`, and creation time; it contains no transcript, model reasoning, findings, AML disposition, or IBM hidden truth.
+The server resolves authoritative context, validates AI configuration, allocates an `investigation_id`, and runs the initial investigation. It persists the minimal session mapping in `runtime_state.json` only after a valid response exists, so configuration/provider/infrastructure failure leaves no unreachable session. The persisted mapping contains only subject/origin/context identity, `follow_up_used`, and creation time; it contains no transcript, model reasoning, findings, AML disposition, or IBM hidden truth.
+
+Before a generated response can be returned, a deterministic band-alignment guard checks it against the authoritative GARG band in the investigation packet. A response that weakens, contradicts, or recasts that band fails closed with `BAND_ALIGNMENT_FAILED` and is not shown.
 
 Response:
 
@@ -338,9 +355,10 @@ run_status
 subject_type
 subject_ref
 context
-findings[]
+summary
+observations[]
+patterns[]
 limits[]
-display_evidence[]
 ```
 
 ### POST `/api/v2/investigations/{investigation_id}/follow-up`
@@ -351,9 +369,9 @@ Request:
 question: string 1..500 characters
 ```
 
-Exactly one follow-up is allowed per parent investigation. No transcript input.
+Exactly one successful follow-up is allowed per parent investigation. No transcript input.
 
-Server looks up the persisted investigation entry in `runtime_state.json`, reloads the stored authoritative subject/context identity, revalidates that context through the deterministic domain, then atomically marks `follow_up_used=true` when accepting the follow-up. A second request for the same investigation returns HTTP 409 `FOLLOW_UP_ALREADY_USED`. The model may re-call bounded tools; no previous transcript/model reasoning/full output is replayed.
+Server looks up the persisted investigation entry in `runtime_state.json`, reloads the stored authoritative subject/context identity, revalidates that context through the deterministic domain, and atomically reserves the available slot in-process. A valid successful follow-up persists `follow_up_used=true`; configuration/provider/infrastructure failure releases the reservation and leaves the follow-up available. Concurrent requests cannot both succeed, and a request after successful consumption returns HTTP 409 `FOLLOW_UP_ALREADY_USED`. The model may re-call bounded tools; no previous transcript/model reasoning/full output is replayed.
 
 ## 9. Common API errors
 
@@ -374,6 +392,8 @@ HTTP mapping:
 - 422 request-schema validation;
 - 500 safe DATA_INTEGRITY_ERROR;
 - 503 AI/MCP unavailable only for AI endpoints; deterministic endpoints remain available.
+
+AI 503 responses include `BAND_ALIGNMENT_FAILED` when generated prose violates the mandatory GARG band interpretation.
 
 No raw DuckDB/OpenAI/MCP exception bodies reach the browser.
 
@@ -480,6 +500,7 @@ snapshot_id/detector_cutoff
 network_review_band
 network_pattern_score nullable
 rank/percentile nullable
+eligible_account_count
 unscored_reason nullable
 incoming_count
 outgoing_count
@@ -569,6 +590,7 @@ account_ref
 snapshot_id
 detector_cutoff
 network_review_band
+eligible_account_count
 first_order_neighbor_count nullable
 second_order_neighbor_count nullable
 block_measure_support nullable
@@ -668,22 +690,16 @@ Do not create:
 
 Server must return explicit `truncated`, `total_count`, or `has_more` fields where a bounded result could otherwise be mistaken for completeness.
 
-## FINAL IMPLEMENTATION SPLIT — API VS MCP/AI
+## Integrated API / MCP / AI composition
 
-The architecture above is unchanged, but implementation ownership is split for safe parallel delivery:
-
-- **WP04A** owns deterministic REST resources, FastAPI application construction, `runtime_state.json`, and the concrete runtime-state store.
-- **WP04B** owns the stdio MCP server, AI orchestration/routes, prompts/evals, and telemetry.
-
-The integration seam is frozen:
+The release-candidate integration seam is:
 
 ```text
 create_app()
-  -> calls WP03 create_investigation_service_v2()
+  -> calls create_investigation_service_v2()
   -> stores app.state.investigation_service
   -> creates/stores app.state.runtime_state_store
   -> dynamically registers trailsight_v2.ai.http when that module exists
 ```
 
-WP04B's HTTP handlers consume those `app.state` objects; they do not construct repositories/services or modify WP04A application files. WP04B must export the AI router through `trailsight_v2.ai.http` using the exact export shape frozen in its completion report. This split is an implementation/merge decision only and does not change any `/api/v2` endpoint or MCP contract in this document.
-
+AI HTTP handlers consume those `app.state` objects and do not construct repositories or services. `trailsight_v2.ai.http` exports the optional router registered by the application factory. This internal composition does not change any `/api/v2` endpoint or MCP contract in this document.

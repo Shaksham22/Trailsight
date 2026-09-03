@@ -49,6 +49,8 @@ def test_network_context_grounds_persisted_detector_support(mcp_service, root_re
     assert result.status == "OK"
     assert result.first_order_neighbor_count == 11
     assert result.second_order_neighbor_count == 22
+    assert result.eligible_account_count is not None
+    assert result.eligible_account_count > 0
     assert result.block_measure_support is not None
     assert result.block_measure_support.block_measure_1 == 1.1
     resolved = [service.resolve_evidence(evidence_id) for evidence_id in result.evidence_ids]
@@ -64,6 +66,8 @@ def test_transaction_account_context_stays_at_selected_transaction_context(mcp_s
     )
     result = adapter.get_account_context(root_ref)
     assert result.status == "OK"
+    assert result.eligible_account_count is not None
+    assert result.eligible_account_count > 0
     for evidence_id in result.evidence_ids:
         assert service.resolve_evidence(evidence_id).context_identity == seed.context.context_identity
 
@@ -99,6 +103,30 @@ def test_supporting_evidence_is_issued_only_from_available_evidence_and_bounded(
     denied = adapter.get_supporting_evidence("ev2.not-issued.bad")
     assert denied.status == "ERROR"
     assert denied.error_code == "INVALID_CONTEXT"
+
+
+def test_detector_state_support_is_a_valid_deterministic_empty_result(mcp_service, root_ref) -> None:
+    service, alert, _ = mcp_service
+    adapter, _ = _adapter(
+        service, State(), subject_type=SubjectType.ALERT, subject_ref=alert.ref
+    )
+    account = adapter.get_account_context(root_ref)
+    detector_id = next(
+        evidence_id
+        for evidence_id in account.evidence_ids
+        if service.resolve_evidence(evidence_id).evidence_type is EvidenceType.DETECTOR_STATE
+    )
+
+    support = adapter.get_supporting_evidence(detector_id)
+
+    assert support.status == "OK"
+    assert support.supporting_transaction_count == 0
+    assert support.transactions == ()
+    assert support.truncated is False
+    assert support.error_code is None
+    resolved = service.resolve_evidence(support.evidence_id)
+    assert resolved.evidence_type is EvidenceType.SUPPORTING_TRANSACTIONS
+    assert resolved.facts.source_evidence_type is EvidenceType.DETECTOR_STATE
 
 
 def test_transaction_tool_rejects_arbitrary_enumeration(mcp_service) -> None:

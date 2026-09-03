@@ -93,6 +93,58 @@ def test_alert_invalid_status_and_invalid_cursor_are_safe(api_client) -> None:
     assert invalid_cursor.json()["error"]["code"] == "INVALID_INPUT"
 
 
+def test_alert_search_composes_with_review_filter_and_cursor(api_client) -> None:
+    client, _, _ = api_client
+    all_refs = [item["alert_ref"] for item in client.get("/api/v2/alerts").json()["items"]]
+    blank_refs = [
+        item["alert_ref"]
+        for item in client.get("/api/v2/alerts", params={"q": "   "}).json()["items"]
+    ]
+    assert blank_refs == all_refs
+
+    alert_match = client.get("/api/v2/alerts", params={"q": "alert_b"})
+    assert [item["alert_ref"] for item in alert_match.json()["items"]] == ["alert_b"]
+    root = alert_match.json()["items"][0]["account_ref"]
+    for query in (root, "ROOT", "B1"):
+        response = client.get("/api/v2/alerts", params={"q": query})
+        assert [item["alert_ref"] for item in response.json()["items"]] == all_refs
+
+    assert client.patch(
+        "/api/v2/alerts/alert_a/review-status", json={"review_status": "IN_REVIEW"}
+    ).status_code == 200
+    composed = client.get(
+        "/api/v2/alerts",
+        params={"q": "alert_", "review_status": "NOT_REVIEWED"},
+    )
+    assert [item["alert_ref"] for item in composed.json()["items"]] == ["alert_b"]
+
+    first = client.get("/api/v2/alerts", params={"q": "alert_", "limit": 1}).json()
+    second = client.get(
+        "/api/v2/alerts",
+        params={"q": "alert_", "limit": 1, "cursor": first["next_cursor"]},
+    ).json()
+    assert [item["alert_ref"] for item in first["items"]] == ["alert_a"]
+    assert [item["alert_ref"] for item in second["items"]] == ["alert_b"]
+
+
+def test_alert_list_batches_runtime_status_read_once(api_client, monkeypatch) -> None:
+    client, app, _ = api_client
+    store = app.state.runtime_state_store
+    reads = 0
+    original = store._read_validated_unlocked
+
+    def counted_read():
+        nonlocal reads
+        reads += 1
+        return original()
+
+    monkeypatch.setattr(store, "_read_validated_unlocked", counted_read)
+    response = client.get("/api/v2/alerts", params={"limit": 2})
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+    assert reads == 1
+
+
 def test_transactions_list_filters_cursor_detail_and_bounds(api_client) -> None:
     client, _, _ = api_client
     all_rows = client.get("/api/v2/transactions", params={"limit": 2})
@@ -132,6 +184,9 @@ def test_accounts_latest_alert_transaction_origins_and_network(api_client) -> No
     latest = client.get(f"/api/v2/accounts/{root}")
     assert latest.status_code == 200
     assert latest.json()["context"]["context_identity"]["context_kind"] == "SNAPSHOT"
+    assert latest.json()["alert_history_total"] == 2
+    assert latest.json()["alert_history_truncated"] is False
+    assert all(item["review_status"] == "NOT_REVIEWED" for item in latest.json()["alert_history"])
     from_alert = client.get(
         f"/api/v2/accounts/{root}", params={"origin_alert_ref": "alert_a"}
     )
@@ -157,7 +212,9 @@ def test_accounts_latest_alert_transaction_origins_and_network(api_client) -> No
         params={"origin_transaction_ref": selected, "direction": "BOTH"},
     )
     assert txs.status_code == 200
-    assert all(item["transaction_timestamp"] < "2025-01-02T12:00:00" for item in txs.json()["items"])
+    assert all(item["timestamp"] < "2025-01-02T12:00:00" for item in txs.json()["items"])
+    assert all(item["sender"]["account_id"] for item in txs.json()["items"])
+    assert all(item["aml_review_priority"] in {"HIGH", "MEDIUM", "LOW", "UNSCORED"} for item in txs.json()["items"])
     network = client.get(
         f"/api/v2/accounts/{root}/network", params={"origin_transaction_ref": selected}
     )

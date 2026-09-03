@@ -10,7 +10,6 @@ from fastapi import APIRouter, Query, Request
 
 from trailsight_v2.domain.errors import InvalidContextError, InvalidInputError
 from trailsight_v2.domain.models import (
-    AccountDetailV2,
     AccountListPageV2,
     AccountListRequestV2,
     AccountNetworkV2,
@@ -26,6 +25,8 @@ from trailsight_v2.domain.models import (
 from trailsight_v2.domain.service import InvestigationServiceV2
 
 from .models import (
+    AccountAlertHistoryItemResponseV2,
+    AccountDetailResponseV2,
     AlertDetailResponseV2,
     AlertListItemResponseV2,
     AlertListResponseV2,
@@ -76,6 +77,7 @@ def list_alerts(
     request: Request,
     cursor: str | None = None,
     limit: Limit = 50,
+    q: str | None = None,
     review_status: ReviewStatus | None = None,
     bank_country: str | None = None,
 ) -> AlertListResponseV2:
@@ -88,15 +90,17 @@ def list_alerts(
         AlertListRequestV2(
             cursor=cursor,
             limit=limit,
+            q=q,
             bank_country=bank_country,
             include_alert_refs=include_refs,
             exclude_alert_refs=exclude_refs,
         )
     )
+    statuses = state_store.get_alert_review_statuses(item.alert_ref for item in page.items)
     items = tuple(
         AlertListItemResponseV2(
             **item.model_dump(mode="python"),
-            review_status=state_store.get_alert_review_status(item.alert_ref),
+            review_status=statuses[item.alert_ref],
         )
         for item in page.items
     )
@@ -196,17 +200,30 @@ def list_accounts(
     )
 
 
-@router.get("/accounts/{account_ref}", response_model=AccountDetailV2)
+@router.get("/accounts/{account_ref}", response_model=AccountDetailResponseV2)
 def get_account(
     account_ref: str,
     request: Request,
     origin_alert_ref: str | None = None,
     origin_transaction_ref: str | None = None,
-) -> AccountDetailV2:
-    service, _ = _services(request)
-    return service.get_account_detail(
+) -> AccountDetailResponseV2:
+    service, state_store = _services(request)
+    detail = service.get_account_detail(
         account_ref,
         origin_ref=_origin_ref(origin_alert_ref, origin_transaction_ref),
+    )
+    statuses = state_store.get_alert_review_statuses(
+        item.alert_ref for item in detail.alert_history
+    )
+    return AccountDetailResponseV2(
+        **detail.model_dump(mode="python", exclude={"alert_history"}),
+        alert_history=tuple(
+            AccountAlertHistoryItemResponseV2(
+                **item.model_dump(mode="python"),
+                review_status=statuses[item.alert_ref],
+            )
+            for item in detail.alert_history
+        ),
     )
 
 

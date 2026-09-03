@@ -7,7 +7,9 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
 from trailsight_v2.domain.models import (
+    AccountDetailV2,
     AccountIdentityV2,
+    AlertHistoryItemV2,
     AlertContextFactsV2,
     BankCountryV2,
     DetectorSupportV2,
@@ -74,6 +76,14 @@ class AlertDetailResponseV2(ApiModel):
     detector_support: DetectorSupportV2 | None
     evidence_ids: tuple[str, ...]
     review_status: ReviewStatus
+
+
+class AccountAlertHistoryItemResponseV2(AlertHistoryItemV2):
+    review_status: ReviewStatus
+
+
+class AccountDetailResponseV2(AccountDetailV2):
+    alert_history: tuple[AccountAlertHistoryItemResponseV2, ...]
 
 
 class ReviewStatusPatchRequestV2(ApiModel):

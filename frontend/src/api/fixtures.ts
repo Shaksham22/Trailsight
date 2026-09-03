@@ -270,6 +270,8 @@ function accountDetailFor(identity: AccountIdentity, origin: AccountOrigin = {})
       { bank_country: "Singapore", incoming_transaction_count: 4, outgoing_transaction_count: 8, distinct_counterparties: 3, latest_interaction: "2026-08-18T10:10:00" },
     ],
     alert_history: baseAlerts.slice(0, 2).map((a) => ({ ...a, review_status: alertStatuses[a.alert_ref] })),
+    alert_history_total: baseAlerts.length,
+    alert_history_truncated: baseAlerts.length > 2,
     account_network: accountNetwork,
     transactions: { items: supportingRows, next_cursor: null, has_more: false },
     counterparties: accountNetwork.relationships,
@@ -313,6 +315,13 @@ export async function fixtureGetAlertDetail(alertRef: string): Promise<AlertDeta
 export async function fixtureListAlerts(query: AlertQuery): Promise<CursorPage<AlertListItem>> {
   await wait();
   let items = baseAlerts.map((a) => ({ ...a, review_status: alertStatuses[a.alert_ref] }));
+  const q = query.q?.trim();
+  if (q) items = items.filter((a) => (
+    a.alert_ref.startsWith(q)
+    || a.account_ref.startsWith(q)
+    || a.account_id.startsWith(q)
+    || a.bank_id.startsWith(q)
+  ));
   if (query.review_status) items = items.filter((a) => a.review_status === query.review_status);
   if (query.bank_country) items = items.filter((a) => a.bank_country === query.bank_country);
   return page(items, query.cursor, query.limit);
@@ -399,19 +408,23 @@ export async function fixtureGetEvidence(evidenceId: string): Promise<EvidenceDi
 
 export async function fixtureStartInvestigation(body: InvestigationRequest): Promise<InvestigationResponse> {
   await wait();
+  const transactionSubject = body.subject_type === "TRANSACTION";
   return {
     investigation_id: `inv_fixture_${body.subject_type.toLowerCase()}`,
     run_status: "SUCCESS",
     subject_type: body.subject_type,
     subject_ref: body.subject_ref,
     context: { context_time: body.origin_transaction_ref ? "2026-08-20T14:36:00" : cutoff, snapshot_id: snapshotId, detector_cutoff: cutoff },
-    findings: [
-      { category: "DETECTOR_OUTPUT", text: "The applicable account state is in the HIGH Network Review Band for this historical detector snapshot.", evidence_ids: [evidenceIds.priority] },
-      { category: "OBSERVED_FACT", text: "The bounded prior-24-hour context contains 18 transactions for the selected account.", evidence_ids: [evidenceIds.activity] },
-      { category: "INTERPRETATION", text: "The combination of elevated network-review state and recent activity may deserve closer analyst inspection; it does not establish laundering.", evidence_ids: [evidenceIds.priority, evidenceIds.activity] },
-    ],
-    limits: ["Trailsight does not know the true laundering outcome and does not infer customer intent."],
-    display_evidence: evidenceCatalog,
+    summary: transactionSubject
+      ? "This transaction is linked to a sender whose wider account connections strongly resemble smurfing under GARG’s analysis. Smurfing is a pattern where transfers are spread across several accounts to make the money trail harder to follow. This transfer sent 12,840.00 CAD and delivered 6,940.12 GBP by Wire."
+      : "GARG found strong evidence that this account’s wider connections resemble smurfing—a pattern where transfers are spread across several accounts to make the money trail harder to follow. Six new accounts appeared in its recent activity, and three outgoing transfers were for similar amounts. Together, these facts strengthen the concern.",
+    observations: transactionSubject
+      ? ["The transfer is cross-currency, between accounts whose bank metadata maps to Canada and the United Kingdom."]
+      : ["The account sent or received money with 31 other accounts across 379 transfers: 148 incoming and 231 outgoing."],
+    patterns: transactionSubject
+      ? ["The cross-currency wire appears alongside the stronger smurfing-like pattern found in the sender’s wider account connections."]
+      : ["Six new relationships and repeated similar-size outgoing transfers appear alongside more outgoing than incoming activity."],
+    limits: [],
   };
 }
 
@@ -427,9 +440,10 @@ export async function fixtureSubmitFollowUp(investigationId: string, question: s
     subject_type: "TRANSACTION",
     subject_ref: TXN_MAIN,
     context: { context_time: "2026-08-20T14:36:00", snapshot_id: snapshotId, detector_cutoff: cutoff },
-    findings: [{ category: "OBSERVED_FACT", text: "The selected sender and receiver have no earlier interaction in the resolved historical context.", evidence_ids: [evidenceIds.relationship] }],
-    limits: ["This response remains bounded to the same subject and context."],
-    display_evidence: evidenceCatalog,
+    summary: "The selected sender and receiver have no earlier interaction in the resolved historical context.",
+    observations: ["No earlier interaction is present in the supplied relationship context."],
+    patterns: [],
+    limits: [],
   };
 }
 

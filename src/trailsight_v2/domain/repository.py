@@ -500,17 +500,67 @@ class DuckDBInvestigationRepositoryV2:
                 AND (from_account_ref = ? OR to_account_ref = ?)
                 AND from_account_ref <> to_account_ref
                 {exclusion}
+            ), aggregated AS (
+              SELECT cp,
+                     SUM(incoming)::BIGINT AS incoming_count,
+                     SUM(outgoing)::BIGINT AS outgoing_count,
+                     COUNT(*)::BIGINT AS total_count,
+                     MIN(transaction_timestamp) AS first_timestamp,
+                     MAX(transaction_timestamp) AS last_timestamp
+              FROM directed
+              GROUP BY cp
             )
-            SELECT cp,
-                   SUM(incoming)::BIGINT, SUM(outgoing)::BIGINT, COUNT(*)::BIGINT,
-                   MIN(transaction_timestamp), MAX(transaction_timestamp)
-            FROM directed
-            GROUP BY cp
-            ORDER BY COUNT(*) DESC, MAX(transaction_timestamp) DESC, cp ASC
+            SELECT a.account_ref, a.source_dataset, a.bank_id, a.account_id,
+                   b.mapping_version, b.country_name, b.iso_alpha2,
+                   b.centroid_latitude, b.centroid_longitude,
+                   ag.incoming_count, ag.outgoing_count, ag.total_count,
+                   ag.first_timestamp, ag.last_timestamp
+            FROM aggregated ag
+            JOIN accounts a ON a.account_ref = ag.cp
+            JOIN banks b ON b.bank_id = a.bank_id
+            ORDER BY ag.total_count DESC, ag.last_timestamp DESC, a.account_ref ASC
             LIMIT ?
             """,
             params,
         )
+
+    def network_relationship_row(
+        self, account_ref: str, counterparty_ref: str, context_time: datetime
+    ) -> tuple[Any, ...]:
+        """Return one relationship aggregate with its counterparty identity."""
+        row = self._fetchone(
+            """
+            WITH aggregate AS (
+              SELECT
+                SUM(CASE WHEN to_account_ref = ? THEN 1 ELSE 0 END)::BIGINT AS incoming_count,
+                SUM(CASE WHEN from_account_ref = ? THEN 1 ELSE 0 END)::BIGINT AS outgoing_count,
+                COUNT(*)::BIGINT AS total_count,
+                MIN(transaction_timestamp) AS first_timestamp,
+                MAX(transaction_timestamp) AS last_timestamp
+              FROM transactions
+              WHERE transaction_timestamp < ?
+                AND ((from_account_ref = ? AND to_account_ref = ?)
+                     OR (from_account_ref = ? AND to_account_ref = ?))
+            )
+            SELECT a.account_ref, a.source_dataset, a.bank_id, a.account_id,
+                   b.mapping_version, b.country_name, b.iso_alpha2,
+                   b.centroid_latitude, b.centroid_longitude,
+                   ag.incoming_count, ag.outgoing_count, ag.total_count,
+                   ag.first_timestamp, ag.last_timestamp
+            FROM accounts a
+            JOIN banks b ON b.bank_id = a.bank_id
+            CROSS JOIN aggregate ag
+            WHERE a.account_ref = ?
+            """,
+            [
+                account_ref, account_ref, context_time,
+                account_ref, counterparty_ref, counterparty_ref, account_ref,
+                counterparty_ref,
+            ],
+        )
+        if row is None:
+            raise DataIntegrityError("Network counterparty identity is missing")
+        return row
 
     def account_involvement_count(self, account_ref: str, context_time: datetime) -> int:
         row = self._fetchone(
@@ -566,27 +616,135 @@ class DuckDBInvestigationRepositoryV2:
             )
         ]
 
-    def supporting_transaction_rows(self, refs: Iterable[str]) -> list[tuple[Any, ...]]:
+    def supporting_transaction_rows(
+        self, refs: Iterable[str], *, max_refs: int = 50
+    ) -> list[tuple[Any, ...]]:
+        if not 1 <= max_refs <= 450:
+            raise InvalidInputError("Supporting transaction batch limit is invalid")
         bounded = list(dict.fromkeys(refs))
-        if len(bounded) > 50:
-            raise ResultTooLargeError("Display evidence support is limited to 50 transactions")
+        if len(bounded) > max_refs:
+            if max_refs == 50:
+                raise ResultTooLargeError(
+                    "Display evidence support is limited to 50 transactions"
+                )
+            raise ResultTooLargeError("Supporting transaction batch exceeded its bounded limit")
         if not bounded:
             return []
-        placeholders = ",".join("?" for _ in bounded)
-        rows = self._fetchall(
-            f"""
-            SELECT transaction_ref, transaction_timestamp, from_account_ref, from_bank_id,
-                   to_account_ref, to_bank_id, amount_paid, payment_currency, amount_received,
-                   receiving_currency, payment_format, cross_currency
-            FROM transactions
-            WHERE transaction_ref IN ({placeholders})
-            """,
-            bounded,
-        )
-        by_ref = {str(row[0]): row for row in rows}
-        if len(by_ref) != len(bounded):
+        transaction_by_ref: dict[str, tuple[Any, ...]] = {}
+        review_by_ref: dict[str, tuple[Any, ...]] = {}
+        for start in range(0, len(bounded), 50):
+            chunk = bounded[start : start + 50]
+            placeholders = ",".join("?" for _ in chunk)
+            for row in self._fetchall(
+                f"""
+                SELECT transaction_ref, transaction_timestamp,
+                       from_account_ref, from_bank_id, from_account_id,
+                       to_account_ref, to_bank_id, to_account_id,
+                       amount_paid, payment_currency, amount_received,
+                       receiving_currency, payment_format, cross_currency
+                FROM transactions
+                WHERE transaction_ref IN ({placeholders})
+                """,
+                chunk,
+            ):
+                transaction_by_ref[str(row[0])] = row
+            for row in self._fetchall(
+                f"""
+                SELECT transaction_ref, aml_review_priority,
+                       sender_related_alert_ref, receiver_related_alert_ref
+                FROM transaction_review_states
+                WHERE transaction_ref IN ({placeholders})
+                """,
+                chunk,
+            ):
+                review_by_ref[str(row[0])] = row
+        if len(transaction_by_ref) != len(bounded):
             raise DataIntegrityError("Evidence support refers to a missing transaction")
-        return [by_ref[ref] for ref in bounded]
+        if len(review_by_ref) != len(bounded):
+            raise DataIntegrityError("Evidence support transaction review state is missing")
+
+        bank_ids = list(
+            dict.fromkeys(
+                str(row[index])
+                for row in transaction_by_ref.values()
+                for index in (3, 6)
+            )
+        )
+        bank_placeholders = ",".join("?" for _ in bank_ids)
+        bank_by_id = {
+            str(row[0]): row
+            for row in self._fetchall(
+                f"""
+                SELECT bank_id, mapping_version, country_name, iso_alpha2,
+                       centroid_latitude, centroid_longitude
+                FROM banks
+                WHERE bank_id IN ({bank_placeholders})
+                """,
+                bank_ids,
+            )
+        }
+        if len(bank_by_id) != len(bank_ids):
+            raise DataIntegrityError("Evidence support Bank Country identity is missing")
+
+        alert_refs = list(
+            dict.fromkeys(
+                str(row[index])
+                for row in review_by_ref.values()
+                for index in (2, 3)
+                if row[index] is not None
+            )
+        )
+        alert_cutoffs: dict[str, Any] = {}
+        if alert_refs:
+            alert_placeholders = ",".join("?" for _ in alert_refs)
+            alert_cutoffs = {
+                str(row[0]): row[1]
+                for row in self._fetchall(
+                    f"""
+                    SELECT alert_ref, entry_cutoff
+                    FROM network_alerts
+                    WHERE alert_ref IN ({alert_placeholders})
+                    """,
+                    alert_refs,
+                )
+            }
+
+        def related_alert(review: tuple[Any, ...]) -> str | None:
+            sender = str(review[2]) if review[2] is not None else None
+            receiver = str(review[3]) if review[3] is not None else None
+            if sender is None:
+                return receiver
+            if receiver is None:
+                return sender
+            sender_cutoff = alert_cutoffs.get(sender)
+            receiver_cutoff = alert_cutoffs.get(receiver)
+            if (
+                sender_cutoff is not None
+                and receiver_cutoff is not None
+                and sender_cutoff != receiver_cutoff
+            ):
+                return sender if sender_cutoff > receiver_cutoff else receiver
+            return sender if sender <= receiver else receiver
+
+        rows: list[tuple[Any, ...]] = []
+        for ref in bounded:
+            transaction = transaction_by_ref[ref]
+            review = review_by_ref[ref]
+            sender_bank = bank_by_id[str(transaction[3])]
+            receiver_bank = bank_by_id[str(transaction[6])]
+            rows.append(
+                (
+                    transaction[0], transaction[1],
+                    transaction[2], transaction[3], transaction[4],
+                    *sender_bank[1:],
+                    transaction[5], transaction[6], transaction[7],
+                    *receiver_bank[1:],
+                    transaction[8], transaction[9], transaction[10],
+                    transaction[11], transaction[12], review[1],
+                    related_alert(review), transaction[13],
+                )
+            )
+        return rows
 
     def activity_bucket_rows(
         self,
@@ -641,16 +799,18 @@ class DuckDBInvestigationRepositoryV2:
             FROM flow
             GROUP BY country_name, iso
             ORDER BY total_count DESC, iso ASC
-            LIMIT 12
             """,
             [account_ref, account_ref, account_ref, account_ref, account_ref,
              context_time, account_ref, account_ref],
         )
 
-    def alert_history_rows(self, account_ref: str, context_time: datetime) -> list[tuple[Any, ...]]:
-        return self._fetchall(
+    def alert_history_rows(
+        self, account_ref: str, context_time: datetime
+    ) -> tuple[list[tuple[Any, ...]], int]:
+        rows = self._fetchall(
             """
-            SELECT alert_ref, entry_snapshot_id, entry_cutoff, reason_code
+            SELECT alert_ref, entry_snapshot_id, entry_cutoff, reason_code,
+                   COUNT(*) OVER ()::BIGINT AS alert_history_total
             FROM network_alerts
             WHERE account_ref = ? AND entry_cutoff <= ?
             ORDER BY entry_cutoff DESC, alert_ref ASC
@@ -658,6 +818,7 @@ class DuckDBInvestigationRepositoryV2:
             """,
             [account_ref, context_time],
         )
+        return rows, int(rows[0][4]) if rows else 0
 
     @staticmethod
     def _encode_page_cursor(kind: str, values: list[Any]) -> str:
@@ -713,6 +874,7 @@ class DuckDBInvestigationRepositoryV2:
         *,
         cursor: str | None,
         limit: int,
+        q: str | None,
         bank_country: str | None,
         include_alert_refs: tuple[str, ...] | None,
         exclude_alert_refs: tuple[str, ...] | None,
@@ -737,6 +899,12 @@ class DuckDBInvestigationRepositoryV2:
         else:
             cursor_time = None
             cursor_ref = None
+        if q:
+            clauses.append(
+                "(starts_with(na.alert_ref, ?) OR starts_with(na.account_ref, ?) "
+                "OR starts_with(a.account_id, ?) OR starts_with(a.bank_id, ?))"
+            )
+            params.extend([q, q, q, q])
         if bank_country:
             clauses.append("(b.country_name = ? OR b.iso_alpha2 = ?)")
             params.extend([bank_country, bank_country])
@@ -794,6 +962,59 @@ class DuckDBInvestigationRepositoryV2:
             )
         return page, next_cursor, has_more
 
+    def _transaction_summary_rows(
+        self,
+        where: str,
+        params: list[Any],
+        *,
+        limit: int,
+        candidate_joins: str = "",
+    ) -> list[tuple[Any, ...]]:
+        """Select a bounded transaction page before applying display-only enrichment."""
+        return self._fetchall(
+            f"""
+            WITH page_candidates AS MATERIALIZED (
+                SELECT t.transaction_ref, t.transaction_timestamp,
+                       t.from_account_ref, t.from_bank_id, t.from_account_id,
+                       t.to_account_ref, t.to_bank_id, t.to_account_id,
+                       t.amount_paid, t.payment_currency, t.amount_received,
+                       t.receiving_currency, t.payment_format, t.cross_currency
+                FROM transactions t
+                {candidate_joins}
+                WHERE {where}
+                ORDER BY t.transaction_timestamp DESC, t.transaction_ref DESC
+                LIMIT ?
+            )
+            SELECT pc.transaction_ref, pc.transaction_timestamp,
+                   pc.from_account_ref, pc.from_bank_id, pc.from_account_id,
+                   sb.mapping_version, sb.country_name, sb.iso_alpha2,
+                   sb.centroid_latitude, sb.centroid_longitude,
+                   pc.to_account_ref, pc.to_bank_id, pc.to_account_id,
+                   rb.mapping_version, rb.country_name, rb.iso_alpha2,
+                   rb.centroid_latitude, rb.centroid_longitude,
+                   pc.amount_paid, pc.payment_currency, pc.amount_received,
+                   pc.receiving_currency, pc.payment_format, trs.aml_review_priority,
+                   CASE
+                     WHEN trs.sender_related_alert_ref IS NULL THEN trs.receiver_related_alert_ref
+                     WHEN trs.receiver_related_alert_ref IS NULL THEN trs.sender_related_alert_ref
+                     WHEN sna.entry_cutoff > rna.entry_cutoff THEN trs.sender_related_alert_ref
+                     WHEN rna.entry_cutoff > sna.entry_cutoff THEN trs.receiver_related_alert_ref
+                     WHEN trs.sender_related_alert_ref <= trs.receiver_related_alert_ref
+                       THEN trs.sender_related_alert_ref
+                     ELSE trs.receiver_related_alert_ref
+                   END AS related_alert,
+                   pc.cross_currency
+            FROM page_candidates pc
+            JOIN banks sb ON sb.bank_id = pc.from_bank_id
+            JOIN banks rb ON rb.bank_id = pc.to_bank_id
+            JOIN transaction_review_states trs ON trs.transaction_ref = pc.transaction_ref
+            LEFT JOIN network_alerts sna ON sna.alert_ref = trs.sender_related_alert_ref
+            LEFT JOIN network_alerts rna ON rna.alert_ref = trs.receiver_related_alert_ref
+            ORDER BY pc.transaction_timestamp DESC, pc.transaction_ref DESC
+            """,
+            [*params, limit],
+        )
+
     def list_transaction_rows(
         self,
         *,
@@ -812,6 +1033,7 @@ class DuckDBInvestigationRepositoryV2:
         self._validate_page_limit(limit)
         clauses: list[str] = []
         params: list[Any] = []
+        candidate_joins: list[str] = []
         if cursor is not None:
             values = self._decode_page_cursor(cursor, "transactions")
             if len(values) != 2:
@@ -834,9 +1056,16 @@ class DuckDBInvestigationRepositoryV2:
             )
             params.extend([q, q, q, q, q])
         if priority is not None:
+            candidate_joins.append(
+                "JOIN transaction_review_states trs ON trs.transaction_ref = t.transaction_ref"
+            )
             clauses.append("trs.aml_review_priority = ?")
             params.append(priority)
         if alert_involvement is not None:
+            if not any("transaction_review_states" in join for join in candidate_joins):
+                candidate_joins.append(
+                    "JOIN transaction_review_states trs ON trs.transaction_ref = t.transaction_ref"
+                )
             clauses.append("trs.alert_involvement = ?")
             params.append(alert_involvement)
         if date_from is not None:
@@ -852,9 +1081,15 @@ class DuckDBInvestigationRepositoryV2:
             clauses.append("t.payment_format = ?")
             params.append(payment_format)
         if sending_bank_country:
+            candidate_joins.append(
+                "JOIN banks sb ON sb.bank_id = t.from_bank_id"
+            )
             clauses.append("(sb.country_name = ? OR sb.iso_alpha2 = ?)")
             params.extend([sending_bank_country, sending_bank_country])
         if receiving_bank_country:
+            candidate_joins.append(
+                "JOIN banks rb ON rb.bank_id = t.to_bank_id"
+            )
             clauses.append("(rb.country_name = ? OR rb.iso_alpha2 = ?)")
             params.extend([receiving_bank_country, receiving_bank_country])
         if cursor_time is not None and cursor_ref is not None:
@@ -864,40 +1099,11 @@ class DuckDBInvestigationRepositoryV2:
             )
             params.extend([cursor_time, cursor_time, cursor_ref])
         where = " AND ".join(clauses) if clauses else "TRUE"
-        params.append(limit + 1)
-        rows = self._fetchall(
-            f"""
-            SELECT t.transaction_ref, t.transaction_timestamp,
-                   t.from_account_ref, t.from_bank_id, t.from_account_id,
-                   sb.mapping_version, sb.country_name, sb.iso_alpha2,
-                   sb.centroid_latitude, sb.centroid_longitude,
-                   t.to_account_ref, t.to_bank_id, t.to_account_id,
-                   rb.mapping_version, rb.country_name, rb.iso_alpha2,
-                   rb.centroid_latitude, rb.centroid_longitude,
-                   t.amount_paid, t.payment_currency, t.amount_received,
-                   t.receiving_currency, t.payment_format, trs.aml_review_priority,
-                   CASE
-                     WHEN trs.sender_related_alert_ref IS NULL THEN trs.receiver_related_alert_ref
-                     WHEN trs.receiver_related_alert_ref IS NULL THEN trs.sender_related_alert_ref
-                     WHEN sna.entry_cutoff > rna.entry_cutoff THEN trs.sender_related_alert_ref
-                     WHEN rna.entry_cutoff > sna.entry_cutoff THEN trs.receiver_related_alert_ref
-                     WHEN trs.sender_related_alert_ref <= trs.receiver_related_alert_ref
-                       THEN trs.sender_related_alert_ref
-                     ELSE trs.receiver_related_alert_ref
-                   END AS related_alert
-            FROM transactions t
-            JOIN accounts sa ON sa.account_ref = t.from_account_ref
-            JOIN banks sb ON sb.bank_id = sa.bank_id
-            JOIN accounts ra ON ra.account_ref = t.to_account_ref
-            JOIN banks rb ON rb.bank_id = ra.bank_id
-            JOIN transaction_review_states trs ON trs.transaction_ref = t.transaction_ref
-            LEFT JOIN network_alerts sna ON sna.alert_ref = trs.sender_related_alert_ref
-            LEFT JOIN network_alerts rna ON rna.alert_ref = trs.receiver_related_alert_ref
-            WHERE {where}
-            ORDER BY t.transaction_timestamp DESC, t.transaction_ref DESC
-            LIMIT ?
-            """,
+        rows = self._transaction_summary_rows(
+            where,
             params,
+            limit=limit + 1,
+            candidate_joins="\n".join(candidate_joins),
         )
         has_more = len(rows) > limit
         page = rows[:limit]
@@ -1048,39 +1254,37 @@ class DuckDBInvestigationRepositoryV2:
     ) -> tuple[list[tuple[Any, ...]], str | None, bool]:
         if not 1 <= limit <= 100:
             raise InvalidInputError("Account transaction limit must be between 1 and 100")
-        clauses = ["transaction_timestamp < ?", "(from_account_ref = ? OR to_account_ref = ?)"]
+        clauses = [
+            "t.transaction_timestamp < ?",
+            "(t.from_account_ref = ? OR t.to_account_ref = ?)",
+        ]
         params: list[Any] = [context_time, account_ref, account_ref]
         if direction is Direction.INCOMING:
-            clauses.append("to_account_ref = ?")
+            clauses.append("t.to_account_ref = ?")
             params.append(account_ref)
         elif direction is Direction.OUTGOING:
-            clauses.append("from_account_ref = ?")
+            clauses.append("t.from_account_ref = ?")
             params.append(account_ref)
         if currency:
-            clauses.append("(payment_currency = ? OR receiving_currency = ?)")
+            clauses.append("(t.payment_currency = ? OR t.receiving_currency = ?)")
             params.extend([currency, currency])
         if counterparty_account_ref:
             clauses.append(
-                "((from_account_ref = ? AND to_account_ref = ?) OR "
-                "(from_account_ref = ? AND to_account_ref = ?))"
+                "((t.from_account_ref = ? AND t.to_account_ref = ?) OR "
+                "(t.from_account_ref = ? AND t.to_account_ref = ?))"
             )
             params.extend([account_ref, counterparty_account_ref, counterparty_account_ref, account_ref])
         if cursor:
             cursor_time, cursor_ref = self.decode_cursor(cursor)
-            clauses.append("(transaction_timestamp < ? OR (transaction_timestamp = ? AND transaction_ref < ?))")
+            clauses.append(
+                "(t.transaction_timestamp < ? OR "
+                "(t.transaction_timestamp = ? AND t.transaction_ref < ?))"
+            )
             params.extend([cursor_time, cursor_time, cursor_ref])
-        params.append(limit + 1)
-        rows = self._fetchall(
-            f"""
-            SELECT transaction_ref, transaction_timestamp, from_account_ref, from_bank_id,
-                   to_account_ref, to_bank_id, amount_paid, payment_currency, amount_received,
-                   receiving_currency, payment_format, cross_currency
-            FROM transactions
-            WHERE {' AND '.join(clauses)}
-            ORDER BY transaction_timestamp DESC, transaction_ref DESC
-            LIMIT ?
-            """,
+        rows = self._transaction_summary_rows(
+            " AND ".join(clauses),
             params,
+            limit=limit + 1,
         )
         has_more = len(rows) > limit
         page = rows[:limit]

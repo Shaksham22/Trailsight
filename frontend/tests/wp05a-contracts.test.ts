@@ -6,8 +6,8 @@ import { dirname, resolve } from "node:path";
 import { ROOT_REDIRECT, APP_ROUTES } from "../src/lib/routes.ts";
 import { buildAccountDetailHref, buildAccountOriginParams, buildAccountSearchParams, buildTransactionSearchParams } from "../src/api/query.ts";
 import { REVIEW_STATUSES, reviewBandLabel } from "../src/lib/workflow.ts";
-import { buildAccountBankCountryVisualModel, buildRouteVisualModel, activityBucketsForCurrency, activityCurrencies, graphTruncationText } from "../src/lib/visualization.ts";
-import { evidenceFocusFromDisplay } from "../src/lib/evidence.ts";
+import { BANK_COUNTRY_MAP_GEOMETRY_NAMES, BANK_COUNTRY_OPTIONS, getBankCountryVisualizationCentroid } from "../src/lib/bankCountries.ts";
+import { accountBankCountryTooltip, buildAccountBankCountryVisualModel, buildRouteVisualModel, activityBucketsForCurrency, activityCurrencies, graphTruncationText } from "../src/lib/visualization.ts";
 import { fixtureGetAccountDetail, fixtureStartInvestigation, fixtureSubmitFollowUp, resetFixtureState } from "../src/api/fixtures.ts";
 import type { AccountNetwork, ActivityContext, BankCountryFlowRow, BankCountryRoute } from "../src/api/types.ts";
 
@@ -25,8 +25,15 @@ test("priority and band wording never turns LOW into a safety label and UNSCORED
   assert.equal(reviewBandLabel("UNSCORED"), "Insufficient Network Context");
   const styles = await source("src/styles.css");
   const lowRule = styles.match(/\.pill--low\s*\{[^}]+\}/)?.[0] ?? "";
-  assert.match(lowRule, /var\(--low\)/);
+  assert.match(lowRule, /var\(--status-low-text\)/);
+  assert.match(lowRule, /var\(--status-low-border\)/);
+  assert.match(lowRule, /var\(--status-low-bg\)/);
   assert.doesNotMatch(lowRule.toLowerCase(), /green|safe/);
+  for (const priority of ["high", "medium", "low", "unscored"]) {
+    assert.match(styles, new RegExp(`--status-${priority}-text:`));
+    assert.match(styles, new RegExp(`--status-${priority}-border:`));
+    assert.match(styles, new RegExp(`--status-${priority}-bg:`));
+  }
 });
 
 test("transaction/account browsing constructs server query parameters rather than loaded-page filter state", () => {
@@ -74,16 +81,23 @@ test("activity timeline separates unlike currencies", () => {
   assert.deepEqual(activityBucketsForCurrency(activity, "CAD").map((row) => row.incoming_amount), ["10"]);
 });
 
-test("AI findings use only approved categories, backend citation labels, and evidence focus is deterministic", async () => {
+test("AI investigation renders the direct structured analyst summary contract", async () => {
   resetFixtureState();
   const result = await fixtureStartInvestigation({ subject_type: "TRANSACTION", subject_ref: "txn_x", origin_alert_ref: null, origin_transaction_ref: "txn_x" });
-  assert.deepEqual(new Set(result.findings.map((finding) => finding.category)), new Set(["DETECTOR_OUTPUT", "OBSERVED_FACT", "INTERPRETATION"]));
-  assert.deepEqual(result.display_evidence.slice(0, 3).map((evidence) => evidence.label), ["E1", "E2", "E3"]);
-  const focus = evidenceFocusFromDisplay(result.display_evidence[0]);
-  assert.equal(focus.uiTarget, result.display_evidence[0].ui_target);
+  assert.match(result.summary, /linked to a sender whose wider account connections/);
+  assert.match(result.summary, /Smurfing is a pattern where transfers are spread across several accounts/);
+  assert.match(result.summary, /12,840\.00 CAD and delivered 6,940\.12 GBP by Wire/);
+  assert.doesNotMatch(result.summary, /endpoint account|structural network concern|counterparty|supplied activity/);
+  assert.doesNotMatch(result.summary, /Network Pattern Score|rank|percentile|snapshot/);
+  assert.equal(result.observations.length, 1);
+  assert.equal(result.patterns.length, 1);
   const aiSource = await source("src/components/AIInvestigation.tsx");
-  const focusBody = aiSource.slice(aiSource.indexOf("async function focusEvidence"), aiSource.indexOf("async function sendFollowUp"));
-  assert.doesNotMatch(focusBody, /startInvestigation/);
+  for (const heading of ["Summary", "Key observations", "Patterns noticed", "Limits"]) {
+    assert.match(aiSource, new RegExp(heading));
+  }
+  assert.doesNotMatch(aiSource, /Bounded grounded assistance|AI can select and synthesize deterministic evidence|What to examine|attention_points/);
+  assert.match(aiSource, /!!response\.limits\.length/);
+  assert.doesNotMatch(aiSource, /EVIDENCE_VALIDATION_FAILED|display_evidence|evidence_ids/);
 });
 
 test("exactly one follow-up is accepted and the second is terminal", async () => {
@@ -132,7 +146,23 @@ test("account Bank-Country visualization consumes flow rows and produces multipl
   assert.deepEqual(model.connections.map((connection) => connection.bankCountry), ["United Kingdom", "United States", "Singapore"]);
   assert.equal(model.outgoingLines.length, 3);
   assert.equal(model.incomingLines.length, 3);
+  assert.equal(model.connections.find((connection) => connection.bankCountry === "United States")?.geometryName, "United States of America");
+  assert.deepEqual(model.polygonUnavailableCountries, ["Singapore"]);
   assert.match(model.summary, /Connected Bank Countries \(3\): Singapore, United Kingdom, United States/);
+});
+
+test("every configured Bank Country has a centroid and either valid polygon mapping or intentional marker-only handling", async () => {
+  const geo = JSON.parse(await source("src/assets/world.geo.json")) as { features: Array<{ properties: { name: string } }> };
+  const featureNames = new Set(geo.features.map((feature) => feature.properties.name));
+  for (const country of BANK_COUNTRY_OPTIONS) {
+    assert.ok(getBankCountryVisualizationCentroid(country), `${country} must have a centroid`);
+    const geometryName = BANK_COUNTRY_MAP_GEOMETRY_NAMES[country];
+    if (geometryName === null) {
+      assert.equal(country, "Singapore");
+    } else {
+      assert.ok(featureNames.has(geometryName), `${country} must map to bundled GeoJSON`);
+    }
+  }
 });
 
 test("account Bank-Country same-country flow highlights the root without fabricating an international route", () => {
@@ -159,17 +189,17 @@ test("account Bank-Country map enables bounded zoom/pan and keeps root, connecte
   const accountMap = visualizations.slice(accountMapStart, graphStart);
   assert.match(accountMap, /roam: true/);
   assert.match(accountMap, /scaleLimit: \{ min: 1, max: 6 \}/);
-  assert.match(accountMap, /name: "Root Bank Country"/);
-  assert.match(accountMap, /name: "Connected Bank Countries"/);
-  assert.match(accountMap, /name: "Outgoing"/);
-  assert.match(accountMap, /name: "Incoming"/);
+  assert.match(accountMap, /ACCOUNT_BANK_COUNTRY_SEMANTICS\.root\.seriesName/);
+  assert.match(accountMap, /ACCOUNT_BANK_COUNTRY_SEMANTICS\.connected\.seriesName/);
+  assert.match(accountMap, /ACCOUNT_BANK_COUNTRY_SEMANTICS\.outgoing\.seriesName/);
+  assert.match(accountMap, /ACCOUNT_BANK_COUNTRY_SEMANTICS\.incoming\.seriesName/);
   assert.match(accountMap, /scroll or pinch to zoom, drag to pan/);
   const styles = await source("src/styles.css");
   assert.match(styles, /\.chart--account-country-map\{height:500px\}/);
-  assert.match(styles, /\.legend-country--root\{background:#D7B95B/);
-  assert.match(styles, /\.legend-country--connected\{background:#287E98/);
-  assert.match(styles, /\.legend-line--outgoing\{border-top-color:#B69CFF\}/);
-  assert.match(styles, /\.legend-line--incoming\{border-top-color:#67D3A5\}/);
+  assert.match(styles, /\.legend-country--root\{background:var\(--map-root\)/);
+  assert.match(styles, /\.legend-country--connected\{background:var\(--map-connected\)/);
+  assert.match(styles, /\.legend-line--outgoing\{border-top-color:var\(--flow-outgoing\)\}/);
+  assert.match(styles, /\.legend-line--incoming\{border-top-color:var\(--flow-incoming\)\}/);
 });
 
 test("account Bank-Country hover details remain deterministic and include bounded flow facts", async () => {
@@ -182,5 +212,19 @@ test("account Bank-Country hover details remain deterministic and include bounde
   assert.match(accountMap, /Distinct counterparties:/);
   assert.match(accountMap, /Latest interaction:/);
   assert.match(accountMap, /formatter: \(params: unknown\) => accountBankCountryTooltip\(params, regionTooltips\)/);
+  const tooltips = new Map([["Canada", "Root Bank Country · Canada"]]);
+  assert.equal(accountBankCountryTooltip({ name: "Canada" }, tooltips), "Root Bank Country · Canada");
+  assert.equal(accountBankCountryTooltip({ name: "Somalia" }, tooltips), "");
+  assert.equal(accountBankCountryTooltip({ data: { tooltipText: "Incoming flow · 2" } }, tooltips), "Incoming flow · 2");
 });
 
+test("transaction activity context is explicitly sender-rooted for the prior 30 days", async () => {
+  const page = await source("src/pages/TransactionDetailPage.tsx");
+  assert.match(page, /title="6\. Sender Activity — Prior 30 Days"/);
+  assert.doesNotMatch(page, /title="6\. Activity Context"/);
+});
+
+test("truncated account alert history states the shown and total counts", async () => {
+  const page = await source("src/pages/AccountDetailPage.tsx");
+  assert.match(page, /Showing latest \{detail\.alert_history\.length\} of \{detail\.alert_history_total\} alerts/);
+});

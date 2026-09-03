@@ -1,4 +1,4 @@
-"""WP04B-owned FastAPI routes composed through WP04A app.state services."""
+"""AI routes composed through the application-owned deterministic services."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v2", tags=["ai-investigation-v2"])
 
 
 def create_router() -> APIRouter:
-    """Frozen WP04A dynamic-registration export."""
+    """Dynamic-registration export used by the V2 application factory."""
     return router
 
 
@@ -44,19 +44,11 @@ async def create_investigation(
         origin_alert_ref=payload.origin_alert_ref,
         origin_transaction_ref=payload.origin_transaction_ref,
     )
-    investigation_id = _new_investigation_id()
-    state.create_investigation_session(
-        investigation_id,
-        subject_type=payload.subject_type,
-        subject_ref=payload.subject_ref,
-        context_identity=seed.context.context_identity,
-        origin_alert_ref=payload.origin_alert_ref,
-        origin_transaction_ref=payload.origin_transaction_ref,
-    )
     try:
         runner = _runner_from_environment()
     except AIConfigurationError:
         return _ai_error("AI_UNAVAILABLE", "AI investigation is not configured", 503)
+    investigation_id = _new_investigation_id()
     result = await runner.run_initial(
         investigation_id=investigation_id,
         seed=seed,
@@ -67,6 +59,14 @@ async def create_investigation(
     )
     if result.response is None:
         return _run_error(result.failure_code)
+    state.create_investigation_session(
+        investigation_id,
+        subject_type=payload.subject_type,
+        subject_ref=payload.subject_ref,
+        context_identity=seed.context.context_identity,
+        origin_alert_ref=payload.origin_alert_ref,
+        origin_transaction_ref=payload.origin_transaction_ref,
+    )
     return result.response
 
 
@@ -90,34 +90,38 @@ async def create_follow_up(
         origin_transaction_ref=session.origin_transaction_ref,
     )
     _require_persisted_context(seed.context.context_identity, session.context_identity)
-    # This is deliberately before the model run. The accepted follow-up is consumed
-    # atomically and restart-safely even if the downstream provider later fails.
-    state.consume_follow_up(investigation_id)
-    follow_up_run_id = _new_investigation_id()
     try:
         runner = _runner_from_environment()
     except AIConfigurationError:
         return _ai_error("AI_UNAVAILABLE", "AI investigation is not configured", 503)
-    result = await runner.run_follow_up(
-        investigation_id=follow_up_run_id,
-        parent_investigation_id=investigation_id,
-        question=payload.question,
-        seed=seed,
-        service=service,
-        runtime_state_path=_runtime_state_path(state),
-        origin_alert_ref=session.origin_alert_ref,
-        origin_transaction_ref=session.origin_transaction_ref,
-    )
-    if result.response is None:
-        return _run_error(result.failure_code)
-    return result.response
+    state.begin_follow_up(investigation_id)
+    completed = False
+    try:
+        result = await runner.run_follow_up(
+            investigation_id=_new_investigation_id(),
+            parent_investigation_id=investigation_id,
+            question=payload.question,
+            seed=seed,
+            service=service,
+            runtime_state_path=_runtime_state_path(state),
+            origin_alert_ref=session.origin_alert_ref,
+            origin_transaction_ref=session.origin_transaction_ref,
+        )
+        if result.response is None:
+            return _run_error(result.failure_code)
+        state.complete_follow_up(investigation_id)
+        completed = True
+        return result.response
+    finally:
+        if not completed:
+            state.release_follow_up(investigation_id)
 
 
 def _app_services(request: Request) -> tuple[Any, Any]:
     service = getattr(request.app.state, "investigation_service", None)
     state = getattr(request.app.state, "runtime_state_store", None)
     if service is None or state is None:
-        raise RuntimeError("WP04A app.state integration services are missing")
+        raise RuntimeError("Trailsight V2 application services are missing")
     return service, state
 
 
@@ -129,7 +133,7 @@ def _runner_from_environment() -> InvestigationRunnerV2:
 def _runtime_state_path(state: Any) -> Path:
     value = getattr(state, "path", None)
     if value is None:
-        raise RuntimeError("WP04A runtime_state_store.path is required for MCP composition")
+        raise RuntimeError("runtime_state_store.path is required for MCP composition")
     return Path(value)
 
 
@@ -154,8 +158,8 @@ def _new_investigation_id() -> str:
 def _run_error(failure_code: str | None) -> JSONResponse:
     code = failure_code or "AI_UNAVAILABLE"
     messages = {
-        "EVIDENCE_VALIDATION_FAILED": "Generated findings failed Evidence V2 validation",
         "STRUCTURED_OUTPUT_INVALID": "The model response did not satisfy the investigation contract",
+        "BAND_ALIGNMENT_FAILED": "The model response did not align with the authoritative GARG result",
         "TOOL_ERROR": "The bounded investigation tools were unavailable",
         "MODEL_TIMEOUT": "The AI investigation timed out",
         "MODEL_ERROR": "The AI model request was unavailable",

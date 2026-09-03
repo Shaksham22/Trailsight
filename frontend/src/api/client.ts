@@ -5,6 +5,7 @@ import {
   buildAlertSearchParams,
   buildTransactionSearchParams,
 } from "./query.ts";
+import { fixtureApi } from "./fixtureBoundary.ts";
 import type {
   AccountDetailResponse,
   AccountIdentity,
@@ -44,19 +45,17 @@ import type {
   ApiDisplayEvidenceV2,
   ApiHealthResponseV2,
   ApiInvestigationResponseV2,
+  ApiSupportingTransactionV2,
   ApiSupportingEvidenceSummaryItemV2,
   ApiTransactionDetailV2,
   ApiTransactionListItemV2,
 } from "./transport.ts";
 
 interface ViteLikeEnv {
-  MODE?: string;
-  VITE_TRAILSIGHT_DATA_MODE?: string;
   VITE_TRAILSIGHT_API_BASE_URL?: string;
 }
 
 const viteEnv = ((import.meta as ImportMeta & { env?: ViteLikeEnv }).env ?? {}) as ViteLikeEnv;
-const useFixtures = viteEnv.MODE === "fixture" || viteEnv.VITE_TRAILSIGHT_DATA_MODE === "fixture";
 const configuredApiBaseUrl = (viteEnv.VITE_TRAILSIGHT_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 
 /**
@@ -112,29 +111,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-async function fixtures() {
-  return import("./fixtures.ts");
-}
-
 export async function getHealth(): Promise<HealthResponse> {
-  if (useFixtures) return (await fixtures()).fixtureGetHealth();
+  if (fixtureApi) return fixtureApi.fixtureGetHealth();
   return request<ApiHealthResponseV2>("/api/v2/health");
 }
 
 export async function listAlerts(query: AlertQuery): Promise<CursorPage<AlertListItem>> {
-  if (useFixtures) return (await fixtures()).fixtureListAlerts(query);
+  if (fixtureApi) return fixtureApi.fixtureListAlerts(query);
   const raw = await request<ApiCursorPage<ApiAlertListItemV2>>(`/api/v2/alerts?${buildAlertSearchParams(query)}`);
   return mapPage(raw, adaptAlertListItem);
 }
 
 export async function getAlertDetail(alertRef: string): Promise<AlertDetailResponse> {
-  if (useFixtures) return (await fixtures()).fixtureGetAlertDetail(alertRef);
+  if (fixtureApi) return fixtureApi.fixtureGetAlertDetail(alertRef);
   const raw = await request<ApiAlertDetailResponseV2>(`/api/v2/alerts/${encodeURIComponent(alertRef)}`);
   return adaptAlertDetail(raw);
 }
 
 export async function updateAlertReviewStatus(alertRef: string, reviewStatus: ReviewWorkflowStatus) {
-  if (useFixtures) return (await fixtures()).fixtureUpdateAlertReviewStatus(alertRef, reviewStatus);
+  if (fixtureApi) return fixtureApi.fixtureUpdateAlertReviewStatus(alertRef, reviewStatus);
   return request<{ alert_ref: string; review_status: ReviewWorkflowStatus; updated_at: string }>(
     `/api/v2/alerts/${encodeURIComponent(alertRef)}/review-status`,
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_status: reviewStatus }) },
@@ -142,7 +137,7 @@ export async function updateAlertReviewStatus(alertRef: string, reviewStatus: Re
 }
 
 export async function listTransactions(query: TransactionQuery): Promise<CursorPage<TransactionListItem>> {
-  if (useFixtures) return (await fixtures()).fixtureListTransactions(query);
+  if (fixtureApi) return fixtureApi.fixtureListTransactions(query);
   const raw = await request<ApiCursorPage<ApiTransactionListItemV2>>(`/api/v2/transactions?${buildTransactionSearchParams(query)}`);
   return mapPage(raw, adaptTransactionListItem);
 }
@@ -152,33 +147,30 @@ async function requestRawTransactionDetail(transactionRef: string): Promise<ApiT
 }
 
 export async function getTransactionDetail(transactionRef: string): Promise<TransactionDetailResponse> {
-  if (useFixtures) return (await fixtures()).fixtureGetTransactionDetail(transactionRef);
+  if (fixtureApi) return fixtureApi.fixtureGetTransactionDetail(transactionRef);
   const raw = await requestRawTransactionDetail(transactionRef);
-  const supportRefs = unique(raw.supporting_evidence_summary.flatMap((item) => item.supporting_transactions.map((row) => row.transaction_ref)));
-  const supportDetails = await loadRawTransactionDetailsBestEffort(supportRefs);
-  return adaptTransactionDetail(raw, supportDetails);
+  return adaptTransactionDetail(raw);
 }
 
 export async function listAccounts(query: AccountQuery): Promise<CursorPage<AccountListItem>> {
-  if (useFixtures) return (await fixtures()).fixtureListAccounts(query);
+  if (fixtureApi) return fixtureApi.fixtureListAccounts(query);
   const raw = await request<ApiCursorPage<ApiAccountListItemV2>>(`/api/v2/accounts?${buildAccountSearchParams(query)}`);
   return mapPage(raw, adaptAccountListItem);
 }
 
 export async function getAccountTransactions(accountRef: string, query: AccountTransactionQuery = {}): Promise<CursorPage<SupportingTransactionRow>> {
-  if (useFixtures) return (await fixtures()).fixtureGetAccountTransactions(accountRef, query);
+  if (fixtureApi) return fixtureApi.fixtureGetAccountTransactions(accountRef, query);
   const params = buildAccountTransactionParams(query);
   const raw = await request<ApiAccountTransactionPageV2>(`/api/v2/accounts/${encodeURIComponent(accountRef)}/transactions?${params}`);
-  const details = await Promise.all(raw.items.map((row) => requestRawTransactionDetail(row.transaction_ref)));
   return {
-    items: details.map((detail) => ({ ...transactionListItemFromDetail(detail), relationship_to_subject: "Account transaction" })),
+    items: raw.items.map((item) => ({ ...adaptTransactionListItem(item), relationship_to_subject: "Account transaction" })),
     next_cursor: raw.next_cursor,
     has_more: raw.has_more,
   };
 }
 
 export async function getAccountNetwork(accountRef: string, origin: AccountOrigin = {}): Promise<AccountNetwork> {
-  if (useFixtures) return (await fixtures()).fixtureGetAccountNetwork(accountRef, origin);
+  if (fixtureApi) return fixtureApi.fixtureGetAccountNetwork(accountRef, origin);
   const params = buildAccountOriginParams(origin);
   const suffix = params.toString();
   const raw = await request<ApiAccountNetworkV2>(`/api/v2/accounts/${encodeURIComponent(accountRef)}/network${suffix ? `?${suffix}` : ""}`);
@@ -186,7 +178,7 @@ export async function getAccountNetwork(accountRef: string, origin: AccountOrigi
 }
 
 export async function getAccountDetail(accountRef: string, origin: AccountOrigin = {}): Promise<AccountDetailResponse> {
-  if (useFixtures) return (await fixtures()).fixtureGetAccountDetail(accountRef, origin);
+  if (fixtureApi) return fixtureApi.fixtureGetAccountDetail(accountRef, origin);
   const params = buildAccountOriginParams(origin);
   const suffix = params.toString();
   const [raw, transactions, accountNetwork] = await Promise.all([
@@ -195,31 +187,21 @@ export async function getAccountDetail(accountRef: string, origin: AccountOrigin
     getAccountNetwork(accountRef, origin),
   ]);
 
-  const [alertHistory, selectedTransaction] = await Promise.all([
-    Promise.all(raw.alert_history.map(async (item) => {
-      const alert = await request<ApiAlertDetailResponseV2>(`/api/v2/alerts/${encodeURIComponent(item.alert_ref)}`);
-      return {
-        alert_ref: item.alert_ref,
-        entry_snapshot_id: item.entry_snapshot_id,
-        entry_cutoff: item.entry_cutoff,
-        primary_reason: item.reason_code,
-        review_status: alert.review_status,
-      };
-    })),
-    raw.context.selected_transaction_ref ? requestRawTransactionDetail(raw.context.selected_transaction_ref) : Promise.resolve(null),
-  ]);
+  const selectedTransaction = raw.context.selected_transaction_ref
+    ? await requestRawTransactionDetail(raw.context.selected_transaction_ref)
+    : null;
 
-  return adaptAccountDetail(raw, accountNetwork, transactions, alertHistory, selectedTransaction);
+  return adaptAccountDetail(raw, accountNetwork, transactions, selectedTransaction);
 }
 
 export async function getEvidence(evidenceId: string): Promise<EvidenceDisplay> {
-  if (useFixtures) return (await fixtures()).fixtureGetEvidence(evidenceId);
+  if (fixtureApi) return fixtureApi.fixtureGetEvidence(evidenceId);
   const raw = await request<ApiDisplayEvidenceV2>(`/api/v2/evidence/${encodeURIComponent(evidenceId)}`);
   return adaptEvidence(raw, null);
 }
 
 export async function startInvestigation(body: InvestigationRequest): Promise<InvestigationResponse> {
-  if (useFixtures) return (await fixtures()).fixtureStartInvestigation(body);
+  if (fixtureApi) return fixtureApi.fixtureStartInvestigation(body);
   const raw = await request<ApiInvestigationResponseV2>("/api/v2/investigations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -229,7 +211,7 @@ export async function startInvestigation(body: InvestigationRequest): Promise<In
 }
 
 export async function submitFollowUp(investigationId: string, question: string): Promise<InvestigationResponse> {
-  if (useFixtures) return (await fixtures()).fixtureSubmitFollowUp(investigationId, question);
+  if (fixtureApi) return fixtureApi.fixtureSubmitFollowUp(investigationId, question);
   const raw = await request<ApiInvestigationResponseV2>(`/api/v2/investigations/${encodeURIComponent(investigationId)}/follow-up`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -314,6 +296,33 @@ function transactionListItemFromDetail(raw: ApiTransactionDetailV2): Transaction
   };
 }
 
+function adaptSupportingTransaction(raw: ApiSupportingTransactionV2): SupportingTransactionRow {
+  return {
+    transaction_ref: raw.transaction_ref,
+    timestamp: raw.transaction_timestamp,
+    sender: {
+      account_ref: raw.from_account_ref,
+      bank_id: raw.from_bank_id,
+      account_id: raw.from_account_id,
+      bank_country: raw.from_bank_country.country_name,
+    },
+    receiver: {
+      account_ref: raw.to_account_ref,
+      bank_id: raw.to_bank_id,
+      account_id: raw.to_account_id,
+      bank_country: raw.to_bank_country.country_name,
+    },
+    amount_paid: raw.amount_paid,
+    payment_currency: raw.payment_currency,
+    amount_received: raw.amount_received,
+    receiving_currency: raw.receiving_currency,
+    payment_format: raw.payment_format,
+    aml_review_priority: raw.aml_review_priority,
+    related_alert: raw.related_alert !== null,
+    relationship_to_subject: "Supporting evidence",
+  };
+}
+
 function adaptAccountListItem(raw: ApiAccountListItemV2): AccountListItem {
   return {
     account_ref: raw.account_ref,
@@ -350,7 +359,7 @@ function adaptAccountNetwork(raw: ApiAccountNetworkV2): AccountNetwork {
   };
 }
 
-function adaptTransactionDetail(raw: ApiTransactionDetailV2, supportDetails: ReadonlyMap<string, ApiTransactionDetailV2>): TransactionDetailResponse {
+function adaptTransactionDetail(raw: ApiTransactionDetailV2): TransactionDetailResponse {
   const base = transactionListItemFromDetail(raw);
   if (!raw.review_state.detector_cutoff) {
     throw appError("INVALID_RESPONSE", "Transaction detail did not include its applicable detector cutoff.");
@@ -407,11 +416,11 @@ function adaptTransactionDetail(raw: ApiTransactionDetailV2, supportDetails: Rea
       sender: raw.local_network_summary.sender ? adaptAccountNetwork(raw.local_network_summary.sender) : null,
       receiver: raw.local_network_summary.receiver ? adaptAccountNetwork(raw.local_network_summary.receiver) : null,
     },
-    supporting_evidence_summary: raw.supporting_evidence_summary.map((item) => adaptTransactionEvidence(item, supportDetails)),
+    supporting_evidence_summary: raw.supporting_evidence_summary.map(adaptTransactionEvidence),
   };
 }
 
-function adaptTransactionEvidence(raw: ApiSupportingEvidenceSummaryItemV2, supportDetails: ReadonlyMap<string, ApiTransactionDetailV2>): TransactionEvidenceDisplay {
+function adaptTransactionEvidence(raw: ApiSupportingEvidenceSummaryItemV2): TransactionEvidenceDisplay {
   return {
     label: raw.label,
     evidence_id: raw.evidence_id,
@@ -424,10 +433,7 @@ function adaptTransactionEvidence(raw: ApiSupportingEvidenceSummaryItemV2, suppo
     facts: raw.facts,
     ui_target: raw.ui_target as EvidenceUiTarget,
     supporting_transaction_count: raw.supporting_transaction_count,
-    supporting_transactions: raw.supporting_transactions.flatMap((row) => {
-      const detail = supportDetails.get(row.transaction_ref);
-      return detail ? [{ ...transactionListItemFromDetail(detail), relationship_to_subject: "Supporting evidence" }] : [];
-    }),
+    supporting_transactions: raw.supporting_transactions.map(adaptSupportingTransaction),
     support_truncated: raw.support_truncated,
   };
 }
@@ -436,7 +442,6 @@ function adaptAccountDetail(
   raw: ApiAccountDetailV2,
   accountNetwork: AccountNetwork,
   transactions: CursorPage<SupportingTransactionRow>,
-  alertHistory: AccountDetailResponse["alert_history"],
   selectedTransaction: ApiTransactionDetailV2 | null,
 ): AccountDetailResponse {
   const detectorSnapshotId = raw.context.detector_snapshot_id ?? raw.context.context_identity.snapshot_id;
@@ -498,7 +503,15 @@ function adaptAccountDetail(
       distinct_counterparties: row.distinct_counterparties,
       latest_interaction: row.latest_interaction,
     })),
-    alert_history: alertHistory,
+    alert_history: raw.alert_history.map((item) => ({
+      alert_ref: item.alert_ref,
+      entry_snapshot_id: item.entry_snapshot_id,
+      entry_cutoff: item.entry_cutoff,
+      primary_reason: item.reason_code,
+      review_status: item.review_status,
+    })),
+    alert_history_total: raw.alert_history_total,
+    alert_history_truncated: raw.alert_history_truncated,
     account_network: accountNetwork,
     transactions,
     counterparties: accountNetwork.relationships,
@@ -534,9 +547,10 @@ function adaptInvestigationResponse(raw: ApiInvestigationResponseV2): Investigat
       snapshot_id: raw.context.detector_snapshot_id ?? raw.context.context_identity.snapshot_id,
       detector_cutoff: raw.context.detector_cutoff,
     },
-    findings: raw.findings.map((finding) => ({ ...finding, evidence_ids: [...finding.evidence_ids] })),
+    summary: raw.summary,
+    observations: [...raw.observations],
+    patterns: [...raw.patterns],
     limits: [...raw.limits],
-    display_evidence: raw.display_evidence.map((item) => adaptEvidence(item.evidence, item.label)),
   };
 }
 
@@ -550,23 +564,10 @@ function adaptBankCountryRoutePoint(raw: ApiBankCountryV2) {
   };
 }
 
-async function loadRawTransactionDetailsBestEffort(refs: string[]): Promise<Map<string, ApiTransactionDetailV2>> {
-  const settled = await Promise.allSettled(refs.map((ref) => requestRawTransactionDetail(ref)));
-  const mapped = new Map<string, ApiTransactionDetailV2>();
-  settled.forEach((result, index) => {
-    if (result.status === "fulfilled") mapped.set(refs[index], result.value);
-  });
-  return mapped;
-}
-
 function mapPage<Raw, UI>(page: ApiCursorPage<Raw>, adapter: (value: Raw) => UI): CursorPage<UI> {
   return { items: page.items.map(adapter), next_cursor: page.next_cursor, has_more: page.has_more };
 }
 
 function numberText(value: number | null): string | null {
   return value === null ? null : String(value);
-}
-
-function unique(values: string[]): string[] {
-  return [...new Set(values)];
 }

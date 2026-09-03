@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP05B REAL API FRONTEND INTEGRATION
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP05B — Real `/api/v2` Frontend Integration
 

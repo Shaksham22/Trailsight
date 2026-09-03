@@ -1,132 +1,155 @@
-# Trailsight
+# Trailsight V2
 
-Trailsight is a one-screen, evidence-backed assistant for reviewing synthetic TransXion transactions. It presents deterministic historical context first, then lets an analyst request concise AI findings tied to application-owned evidence. The analyst retains judgment.
+Trailsight is a local analyst workspace for investigating review-prioritized activity in the synthetic IBM AMLworld HI-Small benchmark. It combines reproducible graph-based prioritization, deterministic historical context, Evidence V2, bounded REST/MCP interfaces, and an optional grounded LLM investigation. The analyst retains judgment.
 
-Trailsight does not decide whether a transaction is fraudulent, money laundering, suspicious, should be blocked, or requires regulatory action.
+Trailsight does **not** decide that an account or transaction is money laundering, assign laundering probabilities, block transactions, or recommend regulatory action.
 
 ## Architecture
 
 ```text
-React -> FastAPI -> deterministic Python -> read-only DuckDB
-                         ^
-                         |
-LLM -> local stdio MCP --+
+IBM HI-Small transactions
+  -> prepared runtime-safe DuckDB
+  -> GARG detector snapshots, review bands, priorities, and alerts
+  -> deterministic investigation domain + Evidence V2
+  -> FastAPI /api/v2 + bounded local stdio MCP
+  -> optional grounded LLM investigation
+  -> React analyst workspace
 ```
 
-FastAPI and the five-tool MCP adapter reuse the same `InvestigationService`; factual calculations are not implemented in the model, MCP, or React. The application retains complete internal evidence, while the model receives bounded aggregate summaries with no transaction references or historical rows. Generated citations are validated and re-resolved before FastAPI returns display evidence.
+FastAPI, MCP, and the React client consume the same deterministic domain contracts. The model receives bounded application-owned context and can cite only Evidence V2 IDs made available during that run.
 
-## Source data and provenance
+## Ground-truth firewall
 
-Trailsight uses the synthetic [TransXion dataset](https://github.com/chaos-max/TransXion) from an external source checkout pinned to commit:
+IBM's `Is Laundering` label and hidden pattern annotations are offline-evaluation inputs only. They are excluded from the runtime DuckDB, API, frontend, Evidence, MCP, prompts, AI context, and runtime telemetry. Detector outputs are produced before any separate offline comparison with benchmark truth.
 
-```text
-53932595c37c23b9f55ea5ddf5984e4d57b88369
-```
+Bank Country is deterministic synthetic **bank metadata**. It is not customer residence, nationality, physical location, domicile, or country risk.
 
-The source repository uses Git LFS for `data/tx.csv`. Install Git LFS before cloning and verify the checkout:
+## Prerequisites
 
-```bash
-git lfs install
-git clone https://github.com/chaos-max/TransXion.git /absolute/path/to/TransXion
-git -C /absolute/path/to/TransXion checkout 53932595c37c23b9f55ea5ddf5984e4d57b88369
-git -C /absolute/path/to/TransXion lfs pull
-git -C /absolute/path/to/TransXion rev-parse HEAD
-```
+- Python 3.12 or newer
+- [uv](https://docs.astral.sh/uv/)
+- Node.js `20.19+` or `22.12+` and npm
+- an externally obtained IBM AMLworld HI-Small transaction CSV when preparing the database
+- optionally, an OpenAI API key and an API model available to your project
 
-Raw TransXion CSVs are not committed to or redistributed with Trailsight, and the generated runtime DuckDB is also excluded. Trailsight does not assert a right to redistribute those CSVs; obtaining source data externally is a project-governance constraint, not legal advice.
+Raw IBM data and generated DuckDB files are intentionally not committed.
 
-`Synthetic Region` is derived as the numeric account suffix modulo 20. It is a source-derived grouping only—not a real country, city, province, geography, or transaction corridor.
-
-## Host setup
-
-Requirements: Python 3.12+, [uv](https://docs.astral.sh/uv/), Node.js/npm, Git LFS, and Docker for the container path.
+## One-time setup
 
 ```bash
 cp .env.example .env
 uv sync --frozen
+npm --prefix frontend ci
 ```
 
-Configure `.env` locally; it is Git-ignored. Use paths for your machine and keep `OPENAI_API_KEY` only in the local environment. The approved final AI configuration is:
+The checked-in `.env.example` contains no secret. Edit only the untracked `.env` file for local paths and optional AI settings.
+
+## Prepare the database when it is absent
+
+Point `--source` at the external HI-Small transaction CSV. Preparation strips hidden truth from the product path and creates the runtime-safe database:
+
+```bash
+uv run python scripts/v2_data_prepare.py \
+  --source /absolute/path/to/HI-Small_Trans.csv \
+  --output data/v2/runtime/trailsight_v2.duckdb
+```
+
+Then materialize detector snapshots, account review bands, transaction priorities, and alerts:
+
+```bash
+uv run python scripts/v2_detector_prepare.py \
+  --database data/v2/runtime/trailsight_v2.duckdb
+```
+
+These are offline preparation commands, not backend startup behavior. Full detector preparation can be long-running; the web app never regenerates it on request. See [Data and detector](docs/02_DATA_AND_DETECTOR.md) for the data contract and offline-evaluation isolation.
+
+## Start Trailsight
+
+Start the backend from the repository root. `--env-file` loads the documented local paths without repeated shell exports:
+
+```bash
+uv run uvicorn trailsight_v2.api.app:create_app \
+  --factory \
+  --env-file .env \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+In another terminal, start the normal real-API frontend:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies `/api` to FastAPI on port 8000. There is no silent fixture fallback.
+
+Check backend readiness at [http://127.0.0.1:8000/api/v2/health](http://127.0.0.1:8000/api/v2/health). Startup fails safely if the prepared database is missing or invalid.
+
+Fixture development is explicit and isolated from normal builds:
+
+```bash
+cd frontend
+npm run dev:fixture
+```
+
+## Optional AI configuration
+
+Set these only in the untracked root `.env`:
 
 ```text
-TRAILSIGHT_MODEL=gpt-5.6-luna
+OPENAI_API_KEY=<local secret>
+TRAILSIGHT_MODEL=<exact API model identifier available to your project>
 TRAILSIGHT_PROMPT_VERSION=investigation-v2
 ```
 
-Prepare the source-derived database on the host:
+`GET /api/v2/health` reports `ai_configured: true` when both `OPENAI_API_KEY` and `TRAILSIGHT_MODEL` are non-empty. Prompt/provider validation occurs when an investigation starts. When AI is unconfigured or unavailable, every deterministic list, detail, workflow, visualization, and Evidence V2 path remains usable.
+
+Start a real investigation from an Account or Transaction detail page using **Investigate**. A successful initial investigation permits exactly one successful follow-up. Configuration, infrastructure, or provider failure does not consume that follow-up; a request after successful consumption returns `FOLLOW_UP_ALREADY_USED`.
+
+One sanitized JSONL record per handled AI run is written to `TRAILSIGHT_TRACE_PATH` (default `data/traces/investigations-v2.jsonl`). The file records model/prompt provenance, bounded MCP call metadata, timing, usage, tool-returned evidence IDs, structural-validation state, and failure code. It does not store API keys, chat transcripts, model reasoning, generated prose, full evidence payloads, or hidden benchmark truth.
+
+OpenAI recommends keeping API keys server-side in environment variables; never place the key in `frontend/.env*` or browser code. See the [official OpenAI API documentation](https://developers.openai.com/api/docs/quickstart).
+
+## Validation
+
+The final deterministic validation sequence is:
 
 ```bash
-set -a
-source .env
-set +a
-uv run python scripts/prepare_runtime_data.py \
-  --source-root "$TRANSXION_SOURCE_DIR" \
-  --case-catalog data/cases/cases.yaml \
-  --output "$TRAILSIGHT_DB_PATH"
+uv run pytest tests/v2
+uv run python evals/v2/run_non_live.py
+
+cd frontend
+npm ci
+npm run test:contracts
+npm run build
 ```
 
-For local development, build the frontend and start the single FastAPI app:
+The non-live eval harness is credential-free and makes no paid model call. It validates the frozen scenario contract through an independent mocked execution path. A real-model investigation remains a separate manual acceptance step.
 
-```bash
-npm --prefix frontend install
-npm --prefix frontend run build
-uv run uvicorn trailsight.api.app:create_app --factory --host 127.0.0.1 --port 8000
-```
+## Important V2 limitations
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Vite development is also available with `npm --prefix frontend run dev`; it proxies `/api` to port 8000.
+- Local single-process MVP; `runtime_state.json` is not a multi-worker state service.
+- No authentication, user accounts, production deployment, or cloud control plane.
+- Review workflow is `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`; `REVIEWED` is terminal.
+- GARG review bands prioritize analyst attention; they are not laundering probabilities.
+- Transaction activity context is fixed to **Sender Activity — Prior 30 Days**.
+- Account Network shows at most 24 counterparties plus the root; truncation is explicit.
+- Model/MCP network context remains capped at 12; Evidence samples remain bounded.
+- Account Detail Bank-Country Flows include all aggregated connections for the resolved context and have no arbitrary top-12 limit.
+- Alert History returns the latest 100 rows with explicit total/truncation metadata.
+- AI is a bounded investigation aid, not a generic chatbot, and permits one successful follow-up.
 
-## Tests and AI evals
+## Authoritative documentation
 
-The normal test suite is deterministic and does not need an API key:
+- [Product contract](docs/00_PRODUCT_CONTRACT.md)
+- [System architecture](docs/01_SYSTEM_ARCHITECTURE.md)
+- [Data and detector](docs/02_DATA_AND_DETECTOR.md)
+- [Investigation domain and Evidence V2](docs/03_DOMAIN_AND_EVIDENCE.md)
+- [REST API and MCP](docs/04_API_AND_MCP.md)
+- [AI and evaluation](docs/05_AI_AND_EVALUATION.md)
+- [Frontend UX](docs/06_FRONTEND_UX.md)
+- [Runtime and configuration](docs/07_RUNTIME_AND_DEPLOYMENT.md)
+- [Testing and acceptance](docs/08_TESTING_AND_ACCEPTANCE.md)
 
-```bash
-uv sync --frozen
-uv run pytest tests/data tests/backend tests/mcp tests/ai tests/integration -q
-npm --prefix frontend install
-npm --prefix frontend run build
-```
-
-The AI eval harness defines 15 required scenarios covering initial investigations, focused tool selection, factual/evidence validity, and abstention. Each result records the exact model, prompt version, judge model, tool sequence, status, usage, and optional estimated cost under `eval_results/<prompt>/<model>/`; generated results remain local and Git-ignored.
-
-With `.env` loaded, run one scenario or the required suite:
-
-```bash
-uv run python -m trailsight_ai.eval_runner --scenario initial-demo-01
-uv run python -m trailsight_ai.eval_runner --required
-```
-
-## Docker
-
-Build the single deployment image; the build context excludes `.env`, raw source data, runtime DuckDB files, traces, and eval results:
-
-```bash
-docker build -t trailsight:local .
-mkdir -p data/traces
-```
-
-Run with the host-prepared database mounted read-only and traces mounted separately as writable. `-e OPENAI_API_KEY` forwards the current shell variable without putting its value in this command or image:
-
-```bash
-docker run --rm --name trailsight -p 8000:8000 \
-  --mount type=bind,src="$(pwd)/data/runtime/trailsight.duckdb",dst=/app/data/runtime/trailsight.duckdb,readonly \
-  --mount type=bind,src="$(pwd)/data/traces",dst=/app/data/traces \
-  -e OPENAI_API_KEY \
-  -e TRAILSIGHT_MODEL=gpt-5.6-luna \
-  -e TRAILSIGHT_PROMPT_VERSION=investigation-v2 \
-  trailsight:local
-```
-
-The image defaults to `TRAILSIGHT_DB_PATH=/app/data/runtime/trailsight.duckdb`, `TRAILSIGHT_STATIC_DIR=/app/frontend/dist`, and `TRAILSIGHT_TRACE_PATH=/app/data/traces/investigations.jsonl`. The DuckDB is never baked into the image.
-
-## Demo 01
-
-1. Open Trailsight; `demo-01` loads its deterministic workspace before any AI request.
-2. Review `A016568 -> A013644`, `69.54 CNY -> 9.40 USD`, Cash, Synthetic Region `8 -> 4`.
-3. Confirm 74 previous outgoing transactions, 70 prior CNY transactions, median `15.095`, historical position about `95.71%`, and zero previous interactions with the current counterparty.
-4. Select **Investigate transaction**, then click an `[E#]` citation to focus the corresponding deterministic section and applicable rows without making another AI request.
-5. Ask one supported question such as “Has this sender used this counterparty before?”
-6. In a fresh case UI state, ask “Why did the sender make this transaction?” and confirm an explicit limit/abstention. A second follow-up is unavailable in the same selected-case state.
-
-## Observability
-
-Each completed or handled AI run appends one JSON object to `TRAILSIGHT_TRACE_PATH` (default `data/traces/investigations.jsonl`). Records include the investigation/case linkage, exact model and prompt, timing, ordered safe MCP calls, result sizes/statuses, token usage, referenced evidence IDs, validation result, and optional cost estimate. They exclude the API key, raw historical rows, complete internal evidence, profile demographics, and the hidden source label.
+`docs/09_IMPLEMENTATION_ROADMAP.md` and `docs/implementation/` preserve implementation history; they are not startup or release runbooks.

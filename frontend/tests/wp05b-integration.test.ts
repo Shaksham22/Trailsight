@@ -16,7 +16,9 @@ import {
   submitFollowUp,
   updateAlertReviewStatus,
 } from "../src/api/client.ts";
-import { buildAccountTransactionParams, buildTransactionSearchParams } from "../src/api/query.ts";
+import { buildAccountTransactionParams, buildAlertSearchParams, buildTransactionSearchParams, updateAlertFilterParams } from "../src/api/query.ts";
+import { fixtureApi as productionFixtureApi } from "../src/api/fixtureBoundary.ts";
+import { fixtureApi as explicitFixtureApi } from "../src/api/fixtureBoundary.fixture.ts";
 import { allowedReviewStatuses } from "../src/lib/workflow.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,7 +64,11 @@ function network(rootRef = "acct_root") {
 }
 
 function supportingTransaction(ref: string) {
-  return { transaction_ref: ref, transaction_timestamp: "2025-01-02T12:00:00", from_account_ref: "acct_root", from_bank_id: "B1", to_account_ref: "acct_cp", to_bank_id: "B2", amount_paid: "100", payment_currency: "CAD", amount_received: "70", receiving_currency: "GBP", payment_format: "Wire", cross_currency: true };
+  return { transaction_ref: ref, transaction_timestamp: "2025-01-02T12:00:00", from_account_ref: "acct_root", from_bank_id: "B1", from_account_id: "ROOT", from_bank_country: bank("B1", "Canada", "CA"), to_account_ref: "acct_cp", to_bank_id: "B2", to_account_id: "CP", to_bank_country: bank("B2", "United Kingdom", "GB"), amount_paid: "100", payment_currency: "CAD", amount_received: "70", receiving_currency: "GBP", payment_format: "Wire", cross_currency: true, aml_review_priority: "HIGH", related_alert: "alert_a" };
+}
+
+function transactionListItem(ref: string) {
+  return { transaction_ref: ref, timestamp: "2025-01-02T12:00:00", sender: identity("acct_root", "B1", "ROOT"), receiver: identity("acct_cp", "B2", "CP", "United Kingdom", "GB"), amount_paid: "100", payment_currency: "CAD", amount_received: "70", receiving_currency: "GBP", payment_format: "Wire", aml_review_priority: "HIGH", related_alert: "alert_a" };
 }
 
 function txDetail(ref: string, supportRef: string | null = null) {
@@ -105,16 +111,27 @@ function withFetch(handler: (url: string, init?: RequestInit) => Response | Prom
 
 test("API base seam, dates, cursor and account transaction query preserve backend semantics", () => {
   assert.equal(buildApiUrl("/api/v2/health", "http://127.0.0.1:8000/"), "http://127.0.0.1:8000/api/v2/health");
-  assert.equal(buildTransactionSearchParams({ cursor: "c1", date_from: "2025-01-01", date_to: "2025-01-02", alert_involvement: "false" }).toString(), "cursor=c1&alert_involvement=false&date_from=2025-01-01T00%3A00%3A00&date_to=2025-01-02T00%3A00%3A00");
+  assert.equal(buildTransactionSearchParams({ cursor: "c1", date_from: "2025-01-01", date_to: "2025-01-02", alert_involvement: "false" }).toString(), "cursor=c1&alert_involvement=false&date_from=2025-01-01T00%3A00%3A00&date_to=2025-01-03T00%3A00%3A00");
+  assert.equal(buildTransactionSearchParams({ date_to: "2025-01-02T15:30:00" }).get("date_to"), "2025-01-02T15:30:00");
   assert.equal(buildAccountTransactionParams({ origin_alert_ref: "alert_a", cursor: "next", limit: 25, direction: "BOTH" }).toString(), "origin_alert_ref=alert_a&cursor=next&limit=25&direction=BOTH");
+  assert.equal(buildAlertSearchParams({ cursor: "stale", limit: 50, q: "ALT-2026", review_status: "IN_REVIEW", bank_country: "Canada" }).toString(), "cursor=stale&limit=50&q=ALT-2026&review_status=IN_REVIEW&bank_country=Canada");
+  const changedAlertSearch = updateAlertFilterParams(new URLSearchParams("cursor=stale&review_status=IN_REVIEW"), "q", "ALT-2026");
+  assert.equal(changedAlertSearch.toString(), "review_status=IN_REVIEW&q=ALT-2026");
 });
 
-test("real alert list uses /api/v2, maps backend Bank Country, and preserves cursor response", async () => {
+test("production and explicit fixture providers are separated at the build-time boundary", async () => {
+  assert.equal(productionFixtureApi, null);
+  assert.equal(typeof explicitFixtureApi?.fixtureListAlerts, "function");
+  const fixturePage = await explicitFixtureApi!.fixtureListAlerts({ q: "B220" });
+  assert.deepEqual(fixturePage.items.map((item) => item.alert_ref), ["ALT-2026-000153"]);
+});
+
+test("real alert list sends q to /api/v2, maps backend Bank Country, and preserves cursor response", async () => {
   await withFetch((url) => {
-    assert.match(url, /^\/api\/v2\/alerts\?/);
+    assert.equal(url, "/api/v2/alerts?limit=1&q=alert_a");
     return response({ items: [{ alert_ref: "alert_a", account_ref: "acct_root", bank_id: "B1", account_id: "ROOT", bank_country: bank("B1", "Canada", "CA"), network_review_band: "HIGH", entry_snapshot_id: "snap_1", entry_cutoff: "2025-01-02T00:00:00", primary_reason: "ENTERED_HIGH", relevant_recent_transaction_count: 3, review_status: "NOT_REVIEWED" }], next_cursor: "cursor-2", has_more: true });
   }, async () => {
-    const page = await listAlerts({ limit: 1 });
+    const page = await listAlerts({ limit: 1, q: "alert_a" });
     assert.equal(page.items[0].bank_country, "Canada");
     assert.equal(page.next_cursor, "cursor-2");
     assert.equal(page.has_more, true);
@@ -127,6 +144,26 @@ test("production path never silently falls back to fixture data after network fa
   });
   const clientSource = await source("src/api/client.ts");
   assert.doesNotMatch(clientSource, /catch[\s\S]{0,160}fixtureList/);
+});
+
+test("heavy detail routes are lazy and visualization code uses the modular ECharts entry points", async () => {
+  const appSource = await source("src/App.tsx");
+  const visualizationSource = await source("src/components/visualizations.tsx");
+  assert.match(appSource, /lazy\(\(\) =>\s*import\("\.\/pages\/TransactionDetailPage"\)/);
+  assert.match(appSource, /lazy\(\(\) =>\s*import\("\.\/pages\/AccountDetailPage"\)/);
+  assert.doesNotMatch(appSource, /import \{ TransactionDetailPage \} from/);
+  assert.doesNotMatch(appSource, /import \{ AccountDetailPage \} from/);
+  assert.match(appSource, /<Suspense fallback=\{<LoadingState/);
+  assert.match(visualizationSource, /from "echarts\/core"/);
+  assert.doesNotMatch(visualizationSource, /import \* as echarts from "echarts"/);
+});
+
+test("Alerts page submits server q and does not filter the loaded page", async () => {
+  const pageSource = await source("src/pages/AlertsPage.tsx");
+  assert.match(pageSource, /listAlerts\(\{[^}]*q: params\.get\("q"\)/s);
+  assert.match(pageSource, /updateAlertFilterParams\(params, key, value\)/);
+  assert.match(pageSource, /cursorStack\.current = \[\]/);
+  assert.doesNotMatch(pageSource, /page\.items\.filter\(/);
 });
 
 test("health and alert detail use authoritative API fields", async () => {
@@ -160,10 +197,11 @@ test("review PATCH sends workflow state, propagates 409 conflicts, and UI transi
   assert.deepEqual(allowedReviewStatuses("REVIEWED"), ["REVIEWED"]);
 });
 
-test("transaction detail consumes corrected backend detail sections and hydrates bounded supporting rows", async () => {
+test("transaction detail renders backend display-ready supporting rows without detail fan-out", async () => {
+  const requests: string[] = [];
   await withFetch((url) => {
+    requests.push(url);
     if (url === "/api/v2/transactions/txn_main") return response(txDetail("txn_main", "txn_support"));
-    if (url === "/api/v2/transactions/txn_support") return response(txDetail("txn_support"));
     return response({ error: { code: "NOT_FOUND", message: "Unexpected" } }, 404);
   }, async () => {
     const detail = await getTransactionDetail("txn_main");
@@ -173,10 +211,11 @@ test("transaction detail consumes corrected backend detail sections and hydrates
     assert.equal(detail.local_network_summary.sender?.relationships[0].total_count, 5);
     assert.equal(detail.supporting_evidence_summary[0].supporting_transactions[0].transaction_ref, "txn_support");
     assert.equal(detail.supporting_evidence_summary[0].supporting_transactions[0].aml_review_priority, "HIGH");
+    assert.deepEqual(requests, ["/api/v2/transactions/txn_main"]);
   });
 });
 
-test("account detail composes real detail, transactions, network, currency activity and alert review status", async () => {
+test("account detail composes display-ready transactions and batched alert status without per-row requests", async () => {
   const rawAccountDetail = {
     account_identity: identity("acct_root", "B1", "ROOT"),
     context: { ...context("ACCOUNT", "acct_root"), alert_ref: "alert_a" },
@@ -186,15 +225,17 @@ test("account detail composes real detail, transactions, network, currency activ
     activity_over_time: [{ day: "2025-01-01", direction: "INCOMING", currency: "CAD", transaction_count: 2, total_amount: "50" }, { day: "2025-01-01", direction: "OUTGOING", currency: "CAD", transaction_count: 3, total_amount: "75" }],
     currency_activity: [{ currency: "CAD", incoming_count: 2, outgoing_count: 3, incoming_amount: "50", outgoing_amount: "75" }],
     bank_country_flows: [{ counterparty_country: "United Kingdom", counterparty_iso_alpha2: "GB", incoming_transaction_count: 2, outgoing_transaction_count: 3, distinct_counterparties: 1, latest_interaction: "2025-01-02T12:00:00" }],
-    alert_history: [{ alert_ref: "alert_a", entry_snapshot_id: "snap_1", entry_cutoff: "2025-01-02T00:00:00", reason_code: "ENTERED_HIGH" }],
+    alert_history: [{ alert_ref: "alert_a", entry_snapshot_id: "snap_1", entry_cutoff: "2025-01-02T00:00:00", reason_code: "ENTERED_HIGH", review_status: "IN_REVIEW" }],
+    alert_history_total: 137,
+    alert_history_truncated: true,
     evidence_ids: ["ev2.account"],
   };
+  const requests: string[] = [];
   await withFetch((url) => {
+    requests.push(url);
     if (url === "/api/v2/accounts/acct_root?origin_alert_ref=alert_a") return response(rawAccountDetail);
-    if (url === "/api/v2/accounts/acct_root/transactions?origin_alert_ref=alert_a&limit=50&direction=BOTH") return response({ items: [supportingTransaction("txn_1")], next_cursor: "next-account-tx", has_more: true });
+    if (url === "/api/v2/accounts/acct_root/transactions?origin_alert_ref=alert_a&limit=50&direction=BOTH") return response({ items: [transactionListItem("txn_1")], next_cursor: "next-account-tx", has_more: true });
     if (url === "/api/v2/accounts/acct_root/network?origin_alert_ref=alert_a") return response(network());
-    if (url === "/api/v2/transactions/txn_1") return response(txDetail("txn_1"));
-    if (url === "/api/v2/alerts/alert_a") return response(alertDetail());
     return response({ error: { code: "NOT_FOUND", message: `Unexpected ${url}` } }, 404);
   }, async () => {
     const detail = await getAccountDetail("acct_root", { origin_alert_ref: "alert_a" });
@@ -207,7 +248,15 @@ test("account detail composes real detail, transactions, network, currency activ
     assert.equal(detail.transactions.next_cursor, "next-account-tx");
     assert.equal(detail.transactions.items[0].transaction_ref, "txn_1");
     assert.equal(detail.alert_history[0].review_status, "IN_REVIEW");
+    assert.equal(detail.alert_history_total, 137);
+    assert.equal(detail.alert_history_truncated, true);
     assert.deepEqual(detail.activity_over_time.buckets.map((row) => row.direction), ["INCOMING", "OUTGOING"]);
+    assert.deepEqual(new Set(requests), new Set([
+      "/api/v2/accounts/acct_root?origin_alert_ref=alert_a",
+      "/api/v2/accounts/acct_root/transactions?origin_alert_ref=alert_a&limit=50&direction=BOTH",
+      "/api/v2/accounts/acct_root/network?origin_alert_ref=alert_a",
+    ]));
+    assert.equal(requests.length, 3);
   });
 });
 
@@ -229,8 +278,7 @@ test("AI start uses structured backend response, follow-up uses one endpoint, an
   let stage = 0;
   const aiResponse = {
     investigation_id: "inv_1", run_status: "SUCCESS", subject_type: "TRANSACTION", subject_ref: "txn_main", context: context("TRANSACTION", "txn_main", "TRANSACTION"),
-    findings: [{ category: "OBSERVED_FACT", text: "Backend grounded finding.", evidence_ids: ["ev2.ai"] }], limits: [],
-    display_evidence: [{ label: "E1", evidence: { evidence_id: "ev2.ai", evidence_type: "TRANSACTION_FACTS", subject_type: "TRANSACTION", subject_ref: "txn_main", context_time: "2025-01-02T12:00:00", snapshot_id: "snap_1", detector_cutoff: "2025-01-02T00:00:00", facts: {}, ui_target: "transaction-facts", supporting_transaction_count: 0, supporting_transactions: [], support_truncated: false } }],
+    summary: "Backend analyst summary.", observations: ["A supplied observation."], patterns: ["A supplied pattern."], limits: [],
   };
   await withFetch((url, init) => {
     stage += 1;
@@ -248,7 +296,8 @@ test("AI start uses structured backend response, follow-up uses one endpoint, an
     return response({ error: { code: "FOLLOW_UP_ALREADY_USED", message: "The single follow-up for this investigation has already been used" } }, 409);
   }, async () => {
     const initial = await startInvestigation({ subject_type: "TRANSACTION", subject_ref: "txn_main", origin_alert_ref: null, origin_transaction_ref: null });
-    assert.equal(initial.display_evidence[0].label, "E1");
+    assert.equal(initial.summary, "Backend analyst summary.");
+    assert.deepEqual(initial.patterns, ["A supplied pattern."]);
     assert.equal((await submitFollowUp(initial.investigation_id, "What changed?")).investigation_id, "inv_followup");
     await assert.rejects(() => submitFollowUp(initial.investigation_id, "Again"), (error: { code?: string }) => error.code === "FOLLOW_UP_ALREADY_USED");
   });

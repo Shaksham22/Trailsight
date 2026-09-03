@@ -9,12 +9,13 @@ import os
 from pathlib import Path
 
 
-DEFAULT_PROMPT_VERSION = "investigation-v1"
+DEFAULT_PROMPT_VERSION = "investigation-v2"
 DEFAULT_TRACE_PATH = Path("data/traces/investigations-v2.jsonl")
 DEFAULT_RUN_TIMEOUT_SECONDS = 60.0
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_FILES = {
     "investigation-v1": _PROJECT_ROOT / "prompts" / "v2" / "investigation-v1.md",
+    "investigation-v2": _PROJECT_ROOT / "prompts" / "v2" / "investigation-v2.md",
 }
 
 

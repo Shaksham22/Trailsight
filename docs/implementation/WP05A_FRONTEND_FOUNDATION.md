@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP05A APPROVED FRONTEND FOUNDATION
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP05A — Approved V2 Frontend Foundation Against Typed Mocks
 

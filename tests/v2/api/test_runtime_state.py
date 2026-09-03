@@ -34,7 +34,7 @@ def test_missing_state_initializes_and_absent_alert_defaults(tmp_path: Path) -> 
     assert payload == {"alerts": {}, "investigations": {}, "version": "runtime-state-v1"}
 
 
-def test_public_review_status_interface_and_forward_transitions_persist(tmp_path: Path) -> None:
+def test_reviewed_is_terminal_v2_policy_and_forward_transitions_persist(tmp_path: Path) -> None:
     path = tmp_path / "runtime_state.json"
     store = RuntimeStateStore(path)
     first = store.set_alert_review_status("alert_1", ReviewStatus.IN_REVIEW)
@@ -45,6 +45,28 @@ def test_public_review_status_interface_and_forward_transitions_persist(tmp_path
     assert reopened.get_alert_review_status("alert_1") is ReviewStatus.REVIEWED
     with pytest.raises(ReviewStateConflictError):
         reopened.set_alert_review_status("alert_1", ReviewStatus.IN_REVIEW)
+
+
+def test_batched_review_statuses_read_and_validate_state_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = RuntimeStateStore(tmp_path / "runtime_state.json")
+    store.set_alert_review_status("alert_a", ReviewStatus.IN_REVIEW)
+    reads = 0
+    original = store._read_validated_unlocked
+
+    def counted_read():
+        nonlocal reads
+        reads += 1
+        return original()
+
+    monkeypatch.setattr(store, "_read_validated_unlocked", counted_read)
+    statuses = store.get_alert_review_statuses(("alert_a", "alert_b", "alert_a"))
+    assert statuses == {
+        "alert_a": ReviewStatus.IN_REVIEW,
+        "alert_b": ReviewStatus.NOT_REVIEWED,
+    }
+    assert reads == 1
 
 
 def test_skipping_review_state_is_rejected_and_same_state_is_idempotent(tmp_path: Path) -> None:
@@ -68,7 +90,9 @@ def test_filter_membership_keeps_runtime_state_small_and_server_queryable(tmp_pa
     assert exclude == ("alert_a",)
 
 
-def test_investigation_session_and_follow_up_survive_reopen(tmp_path: Path) -> None:
+def test_follow_up_reservation_releases_on_failure_and_only_success_persists_consumption(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "runtime_state.json"
     store = RuntimeStateStore(path)
     created = store.create_investigation_session(
@@ -89,12 +113,18 @@ def test_investigation_session_and_follow_up_survive_reopen(tmp_path: Path) -> N
         context_identity=context(),
     )
     assert duplicate.created_at == created.created_at
-    consumed = store.consume_follow_up("inv_1")
+    reserved = store.begin_follow_up("inv_1")
+    assert reserved.follow_up_used is False
+    with pytest.raises(FollowUpAlreadyUsedError):
+        store.begin_follow_up("inv_1")
+    store.release_follow_up("inv_1")
+    store.begin_follow_up("inv_1")
+    consumed = store.complete_follow_up("inv_1")
     assert consumed.follow_up_used is True
     reopened = RuntimeStateStore(path)
     assert reopened.get_investigation_session("inv_1").follow_up_used is True
     with pytest.raises(FollowUpAlreadyUsedError):
-        reopened.consume_follow_up("inv_1")
+        reopened.begin_follow_up("inv_1")
 
 
 def test_runtime_state_has_only_frozen_minimal_session_fields(tmp_path: Path) -> None:

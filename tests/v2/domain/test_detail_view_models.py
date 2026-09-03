@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from trailsight_v2.data.bank_country import bank_country_for
 from trailsight_v2.domain.models import EvidenceType, NetworkReviewBand, UITargetV2
 
-from .conftest import SELECTED_TIME, TxSpec, selected_tx, txref
+from .conftest import AlertSpec, SELECTED_TIME, TxSpec, selected_tx, txref
 
 
 def _prior(
@@ -102,6 +103,50 @@ def test_transaction_detail_indicators_use_resolvable_application_evidence(servi
         EvidenceType.NETWORK_BEHAVIOR,
         EvidenceType.CURRENCY_BEHAVIOR,
     } <= evidence_types
+
+
+def test_transaction_detail_trusted_evidence_display_matches_public_resolution(
+    service_factory,
+) -> None:
+    selected = selected_tx()
+    rows = [_prior(i, minutes=i + 1) for i in range(1, 22)] + [selected]
+    service = service_factory(rows)
+
+    detail = service.get_transaction_detail(selected.ref)
+
+    for summary in detail.supporting_evidence_summary:
+        public_display = service.display_evidence(summary.evidence_id)
+        assert summary.model_dump(exclude={"label"}) == public_display.model_dump()
+
+
+def test_transaction_detail_query_count_stays_well_below_previous_hundreds(
+    service_factory, monkeypatch
+) -> None:
+    selected = selected_tx()
+    rows = [_prior(i, minutes=i + 1) for i in range(1, 22)] + [selected]
+    service = service_factory(rows)
+    repository = service._repository
+    query_count = 0
+    original_fetchone = repository._fetchone
+    original_fetchall = repository._fetchall
+
+    def count_fetchone(statement, parameters=None):
+        nonlocal query_count
+        query_count += 1
+        return original_fetchone(statement, parameters)
+
+    def count_fetchall(statement, parameters=None):
+        nonlocal query_count
+        query_count += 1
+        return original_fetchall(statement, parameters)
+
+    monkeypatch.setattr(repository, "_fetchone", count_fetchone)
+    monkeypatch.setattr(repository, "_fetchall", count_fetchall)
+
+    detail = service.get_transaction_detail(selected.ref)
+
+    assert detail.supporting_evidence_summary
+    assert query_count <= 50
 
 
 def test_transaction_activity_context_is_prior_30_days_currency_separated_and_marks_selected(
@@ -209,6 +254,56 @@ def test_transaction_detail_networks_are_one_hop_bounded_and_evidence_support_is
         item.supporting_transaction_count > 50 and item.support_truncated
         for item in detail.supporting_evidence_summary
     )
+    supporting = next(
+        row
+        for item in detail.supporting_evidence_summary
+        for row in item.supporting_transactions
+    )
+    assert supporting.from_account_id
+    assert supporting.from_bank_country.country_name
+    assert supporting.to_account_id
+    assert supporting.to_bank_country.country_name
+    assert isinstance(supporting.aml_review_priority, NetworkReviewBand)
+
+
+def test_account_bank_country_flows_return_complete_aggregate_without_top_12_limit(
+    service_factory, root_ref
+) -> None:
+    banks_by_country: dict[str, str] = {}
+    candidate = 0
+    while len(banks_by_country) < 13:
+        bank_id = f"COUNTRY_BANK_{candidate}"
+        country = bank_country_for(bank_id).country_name
+        banks_by_country.setdefault(country, bank_id)
+        candidate += 1
+    rows = [
+        TxSpec(
+            txref(index),
+            SELECTED_TIME - timedelta(minutes=index + 1),
+            "B1",
+            "ROOT",
+            bank_id,
+            f"CP{index}",
+        )
+        for index, bank_id in enumerate(banks_by_country.values(), 1)
+    ]
+    service = service_factory([*rows, selected_tx()])
+    detail = service.get_account_detail(root_ref, origin_ref=selected_tx().ref)
+    assert len(detail.bank_country_flows) == 13
+    assert {flow.counterparty_country for flow in detail.bank_country_flows} == set(
+        banks_by_country
+    )
+
+
+def test_account_alert_history_exposes_honest_total_and_truncation(
+    service_factory, root_ref
+) -> None:
+    alerts = [AlertSpec(f"alert_{index:03d}", root_ref) for index in range(137)]
+    service = service_factory([selected_tx()], alerts=alerts)
+    detail = service.get_account_detail(root_ref)
+    assert len(detail.alert_history) == 100
+    assert detail.alert_history_total == 137
+    assert detail.alert_history_truncated is True
 
 
 def test_account_currency_activity_groups_currency_and_direction_without_cross_currency_aggregation(

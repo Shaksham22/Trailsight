@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listAlerts, updateAlertReviewStatus } from "../api/client";
-import { buildAccountDetailHref } from "../api/query";
+import { buildAccountDetailHref, updateAlertFilterParams } from "../api/query";
 import type { AlertListItem, ApplicationError, CursorPage, ReviewWorkflowStatus } from "../api/types";
 import { AlertsTable } from "../components/tables";
-import { CursorPagination, EmptyState, FilterBar, FilterSelect, InlineError, LoadingState, PageHeader, Section, SyntheticDataNotice } from "../components/ui";
+import { CursorPagination, EmptyState, FilterBar, FilterSelect, InlineError, LoadingState, PageHeader, SearchInput, Section, SyntheticDataNotice } from "../components/ui";
 import { BANK_COUNTRY_OPTIONS } from "../lib/bankCountries";
 
 export function AlertsPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const [searchDraft, setSearchDraft] = useState(params.get("q") ?? "");
   const [page, setPage] = useState<CursorPage<AlertListItem> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -18,21 +19,24 @@ export function AlertsPage() {
   const cursorStack = useRef<Array<string | null>>([]);
   const queryKey = params.toString();
 
+  useEffect(() => { setSearchDraft(params.get("q") ?? ""); }, [params]);
+
   useEffect(() => {
     let active = true;
     setPage(null); setLoading(true); setError(null);
-    listAlerts({ cursor: params.get("cursor"), limit: 50, review_status: (params.get("review_status") as ReviewWorkflowStatus | null) ?? "", bank_country: params.get("bank_country") ?? "" })
+    listAlerts({ cursor: params.get("cursor"), limit: 50, q: params.get("q") ?? "", review_status: (params.get("review_status") as ReviewWorkflowStatus | null) ?? "", bank_country: params.get("bank_country") ?? "" })
       .then((result) => { if (active) setPage(result); })
       .catch((caught: ApplicationError) => { if (active) setError(caught.message ?? "Alerts could not be loaded."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [queryKey]);
 
-  function setFilter(key: string, value: string) {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value); else next.delete(key);
-    next.delete("cursor"); cursorStack.current = []; setParams(next);
+  function setFilter(key: "q" | "review_status" | "bank_country", value: string) {
+    const next = updateAlertFilterParams(params, key, value);
+    cursorStack.current = []; setParams(next);
   }
+
+  function submitSearch() { setFilter("q", searchDraft.trim()); }
 
   async function changeStatus(item: AlertListItem, status: ReviewWorkflowStatus) {
     if (status === item.review_status) return;
@@ -51,9 +55,10 @@ export function AlertsPage() {
     <SyntheticDataNotice />
     <Section title="Alert queue" description="Account-native detector alerts with human review progress kept separate from detector state.">
       <FilterBar className="filter-bar--alerts">
+        <SearchInput value={searchDraft} onChange={setSearchDraft} onSubmit={submitSearch} placeholder="Alert ref, Account ref/ID, or Bank ID prefix" />
         <FilterSelect label="Review status" value={params.get("review_status") ?? ""} onChange={(value) => setFilter("review_status", value)}><option value="">All statuses</option><option value="NOT_REVIEWED">Not reviewed</option><option value="IN_REVIEW">In review</option><option value="REVIEWED">Reviewed</option></FilterSelect>
         <FilterSelect label="Bank Country" value={params.get("bank_country") ?? ""} onChange={(value) => setFilter("bank_country", value)}><option value="">All bank countries</option>{BANK_COUNTRY_OPTIONS.map((country) => <option key={country} value={country}>{country}</option>)}</FilterSelect>
-        <div className="filter-note">Filters are server-query parameters. Alert search is not exposed because the frozen V2 Alerts API defines no search field.</div>
+        <button className="button" onClick={submitSearch}>Apply search</button>
       </FilterBar>
       {loading && <LoadingState label="Loading Network Pattern Alerts…" />}{error && <InlineError message={error} />}
       {!loading && !error && page?.items.length === 0 && <EmptyState title="No Network Pattern Alerts match these filters." detail="No-result state does not imply the underlying accounts are safe." />}

@@ -108,6 +108,9 @@ def test_bounded_account_transaction_pagination(service_factory, root_ref) -> No
     service = service_factory(txs)
     first = service.list_account_transactions(root_ref, origin_ref=selected_tx().ref, limit=2)
     assert len(first.items) == 2 and first.has_more and first.next_cursor
+    assert first.items[0].sender.account_id
+    assert first.items[0].sender.bank_country.country_name
+    assert first.items[0].aml_review_priority.value in {"HIGH", "MEDIUM", "LOW", "UNSCORED"}
     second = service.list_account_transactions(root_ref, origin_ref=selected_tx().ref, limit=2, cursor=first.next_cursor)
     assert len(second.items) == 2
     assert {item.transaction_ref for item in first.items}.isdisjoint(item.transaction_ref for item in second.items)

@@ -193,6 +193,8 @@ REVIEWED
 
 These mean workflow progress only. They are not AML disposition.
 
+The only V2 transitions are `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`. `REVIEWED` is deliberately terminal because V2 does not maintain the workflow event/audit history required for safe reopening. V2 must not add `REVIEWED -> IN_REVIEW`.
+
 V1 `case` / `case_ref` is not a V2 primary domain concept.
 
 ## 9. Bank geography
@@ -326,6 +328,8 @@ MUST:
 - amount/activity-over-time plot;
 - counterparty/supporting-relationship table.
 
+Transaction Detail activity is deliberately fixed to the sender's strictly prior 30 days relative to the resolved historical context. V2 has no 7D/30D/90D selector and no receiver switch.
+
 Do not build:
 
 - global graph;
@@ -410,7 +414,7 @@ AI may not:
 - access benchmark labels/patterns;
 - invent evidence IDs.
 
-No persistent general chatbot. One bounded follow-up per investigation is sufficient.
+No persistent general chatbot. Exactly one successful bounded follow-up per investigation is sufficient; configuration/provider/infrastructure failure does not consume it.
 
 ## 17. Evidence principle
 

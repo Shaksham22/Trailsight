@@ -188,6 +188,7 @@ class AccountContextResult(McpContractModel):
     network_review_band: str | None = None
     network_pattern_score: float | None = None
     rank: int | None = None
+    eligible_account_count: int | None = Field(default=None, ge=0)
     percentile: float | None = None
     unscored_reason: str | None = None
     incoming_count: int | None = Field(default=None, ge=0)
@@ -227,6 +228,7 @@ class NetworkContextResult(McpContractModel):
     snapshot_id: str | None = None
     detector_cutoff: str | None = None
     network_review_band: str | None = None
+    eligible_account_count: int | None = Field(default=None, ge=0)
     first_order_neighbor_count: int | None = Field(default=None, ge=0)
     second_order_neighbor_count: int | None = Field(default=None, ge=0)
     block_measure_support: BlockMeasureSupport | None = None
@@ -318,7 +320,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "get_supporting_evidence",
-        "Return at most eight concrete transaction examples for evidence already issued in this run.",
+        "Return at most eight concrete transaction examples for evidence already issued in this run; valid structural evidence may return an OK empty result.",
         SupportingEvidenceInput,
         SupportingEvidenceResult,
         "get_supporting_evidence",

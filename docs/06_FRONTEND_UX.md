@@ -2,30 +2,19 @@
 
 **Status: APPROVED FRONTEND VISUAL/INTERACTION CONTRACT.**
 
-This document incorporates the approved UX/UI handoff into the authoritative system-design bundle. Product/domain/system semantics remain higher authority than visual treatment. Approved UI-01 through UI-06 images, when supplied to an implementation worker, are authoritative visual references; no mockup images were included in the current final-design input, so this document contains the complete text contract needed to implement without redesign.
+This document is the authoritative integrated visual/interaction contract. Product/domain/system semantics remain higher authority than visual treatment. Approved UI-01 through UI-06 references remain useful visual context; the executable implementation is under `frontend/src/`.
 
-## 1. V1 UX REVIEW
+## 1. LEGACY UX REMOVAL RECORD
 
-### What the current V1 frontend does well
-The current repository has a few implementation ideas worth preserving:
+The integrated frontend retained only compatible low-level ideas from the former UI:
+
 - a thin typed API-client pattern;
 - clear loading/error states instead of silently retaining stale subject data;
-- an existing AI panel that keeps deterministic content visible when AI fails;
-- evidence citations that can focus a deterministic UI target and highlight supporting transaction rows;
+- an AI panel that keeps deterministic content visible when AI fails;
+- a direct structured analyst summary that remains subordinate to deterministic page content;
 - readable identifier-first tables and modest visual styling.
 
-### What must be discarded or replaced
-The V1 information architecture is structurally wrong for V2:
-- the application is built around a `CaseSelector` and one selected case;
-- `case_ref` is a primary navigation concept;
-- Person/Merchant entity types appear in the UI;
-- Synthetic Region is presented as investigation context;
-- there is no Alerts → Accounts → Transactions workspace;
-- there are no scalable server-driven account/transaction browsers;
-- there is no account-native Network Pattern Alert queue;
-- there is no Bank Country route map, bounded canonical account graph, or snapshot-aware account investigation page.
-
-The active V2 frontend should therefore replace the V1 shell and page composition, while reusing only compatible low-level concepts such as error handling, evidence-focus behavior, and a small typed fetch layer.
+Case selection, `case_ref` navigation, Person/Merchant types, Synthetic Region, V1 evidence, and `/api/cases` were removed. The active information architecture is Alerts → Accounts/Transactions → deterministic evidence → bounded AI assistance.
 
 ---
 
@@ -52,7 +41,7 @@ Across the supplied references, the strongest ideas are:
 - general-purpose AI chat layouts.
 
 ### Chosen visual direction
-Use a calm dark navy analyst workspace inspired mostly by the best density of references 1, 3, and 4, but with:
+Use a calm neutral analyst workspace in both Light and Dark modes, with:
 - top navigation, because the frozen contract requires it;
 - less red;
 - no neon;
@@ -76,9 +65,11 @@ The primary workflow is:
 5. Analyst opens one or more related transactions.
 6. **Transaction Detail** first explains AML Review Priority and its endpoint-band derivation, then shows exact transaction facts and deterministic indicators.
 7. AI can be invoked after deterministic context is visible.
-8. AI findings cite Evidence V2 and citations focus the corresponding deterministic section or supporting record.
+8. AI displays the model's structured summary, observations, patterns, attention points, and limits directly.
 9. Analyst may use one follow-up.
 10. Review workflow progress is changed only on the Network Pattern Alert: NOT_REVIEWED → IN_REVIEW → REVIEWED.
+
+`REVIEWED` is deliberately terminal in V2. Reopening is not offered because V2 has no workflow event/audit history capable of recording that transition safely.
 
 Direct browsing is equally valid:
 - **All Transactions → Transaction Detail → Account Detail**
@@ -123,7 +114,9 @@ No dashboard route, Case route, chat route, standalone map, or global graph.
 ## 5. DESIGN SYSTEM
 
 ### Overall direction
-Dark, restrained, high-contrast, dense, technical, and calm. Surfaces are differentiated mostly by luminance and borders, not gradients. Color communicates type/state and is always paired with text.
+Neutral, restrained, high-contrast, dense, technical, and calm. Trailsight supports **System / Light / Dark** appearance modes. Light uses a white/cool-gray enterprise hierarchy; Dark uses graphite/charcoal rather than blue-tinted surfaces. Blue is reserved primarily for interaction. Surfaces are differentiated through luminance, borders, and very restrained shadows rather than gradients. Color communicates type/state and is always paired with text.
+
+The preference persists in local storage. `System` follows `prefers-color-scheme` live and does not store a forced light/dark value. Charts, maps, graphs, tooltips, browser theme color, and all semantic UI tokens update with the resolved mode.
 
 ### Typography
 - Primary UI: **Inter**, fallback `ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
@@ -131,11 +124,10 @@ Dark, restrained, high-contrast, dense, technical, and calm. Surfaces are differ
 - Tabular monetary numbers: `font-variant-numeric: tabular-nums`
 
 ### Surface hierarchy
-- Page background: very dark navy
-- Header: slightly lighter than page
-- Primary section: dark slate
-- Secondary/inset section: darker inset slate
-- Hover/focus: lighter border/surface, not glow
+- Light page: cool gray background with white primary surfaces and clear gray insets
+- Dark page: near-black graphite background with charcoal primary/elevated surfaces
+- Header: primary surface with a subtle border in both modes
+- Hover/focus: neutral surface lift plus the interactive-blue focus ring, never a glow-heavy effect
 
 ### Priority treatment
 AML Review Priority and Network Review Band share category colors but never rely only on them.
@@ -150,15 +142,10 @@ Review workflow is visually different from priority:
 - IN_REVIEW: blue
 - REVIEWED: violet/teal
 No green “resolved” semantics.
+The control exposes only `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`; `REVIEWED` has no reopening option in V2.
 
-### AI category treatment
-- DETECTOR_OUTPUT: indigo
-- OBSERVED_FACT: cyan
-- INTERPRETATION: violet
-AI uses subtle category chips and evidence citations, never message bubbles.
-
-### Evidence focus
-Evidence focus uses a high-contrast cyan border + soft inset background and a small “Evidence E#” marker. The highlighted deterministic row/section remains readable without animation.
+### AI summary treatment
+AI uses direct report sections—Summary, Key observations, Patterns noticed, and optional Limits—never message bubbles, procedural advice, or raw Evidence V2 identifiers.
 
 ---
 
@@ -185,6 +172,7 @@ Required columns:
 - Review Status
 
 Interactions:
+- search submits `q` to the server for Alert Ref, Account Ref/ID, or Bank ID prefix matching;
 - row click → Account Detail with `origin_alert_ref`;
 - review-status control is interactive without opening the row;
 - filter/search requests are server-side;
@@ -262,7 +250,9 @@ Render in this exact high-level order:
    - compact rows/cards;
    - every indicator says what was observed.
 
-6. **Activity Context**
+6. **Sender Activity — Prior 30 Days**
+   - sender-rooted and strictly prior to the resolved historical context;
+   - fixed 30-day V2 window; no 7D/30D/90D or sender/receiver selector;
    - currency-separated ECharts timeline;
    - selected transaction marker.
 
@@ -271,14 +261,14 @@ Render in this exact high-level order:
    - one bounded graph shown at a time.
 
 8. **AI Investigation**
-   - idle/loading/success/partial/unavailable/error/evidence-validation-failure;
-   - category labels;
-   - Evidence V2 citations;
+   - idle/loading/success/partial/unavailable/error;
+   - direct structured analyst-summary sections;
    - Limits;
    - one follow-up.
 
 9. **Supporting Transactions / Evidence**
-   - bounded dense table;
+   - bounded dense table rendered from display-ready supporting rows;
+   - no per-row full Transaction Detail hydration;
    - evidence-focused rows can highlight.
 
 ### UI-05 — Account Detail / Investigation
@@ -303,16 +293,16 @@ The top identity strip contains:
 
 Detector technical details are collapsed by default.
 
-### UI-06 — AI Investigation + Evidence Focus
+The Transactions table renders the display-ready Account Transactions response directly; only a genuinely selected historical transaction may require one Transaction Detail request. Bank-Country Flows show every aggregate returned for the resolved context. Alert History shows the latest 100 rows with current review status and, when truncated, explicit copy such as “Showing latest 100 of 137 alerts.”
+
+### UI-06 — AI Investigation
 This is not a separate route. It is a focused state of a detail page.
 
 State shown:
-- AI finding list on the right;
-- category chip per finding;
-- citation `[E1]`, `[E2]`;
-- clicked citation highlighted;
-- matching deterministic indicator/supporting transaction on the left focused with evidence outline;
-- a compact Evidence detail strip showing evidence type, subject, context/cutoff, and bounded supporting refs;
+- Summary;
+- Key observations;
+- Patterns noticed;
+- Limits;
 - one follow-up control at bottom;
 - after use: disabled input + “Follow-up already used”.
 
@@ -344,15 +334,13 @@ All use the same top navigation, dark navy design tokens, table density, semanti
 - **Search:** submit or 300–400ms debounce; never client-filter only the loaded page.
 - **Pagination:** opaque cursor Next/Previous; default 50 rows; max 100 if API supports.
 - **Review workflow change:** save previous value until PATCH succeeds; show inline “Saving…”; on failure retain previous status and show concise inline error.
-- **Evidence citation click:** focus citation, scroll/focus deterministic `ui_target`, highlight matching support rows; no model call.
 - **Graph node click:** select/highlight node and show bounded relationship detail; “View Account” navigation only; never expand hops.
 - **Graph hover:** tooltip with canonical short Bank+Account, direction/relationship counts, Bank Country metadata if provided.
 - **Map hover:** show Sending/Receiving Bank Country + Bank IDs only.
 - **Chart hover:** show timestamp/day, currency-specific amount, count, and selected-transaction marker where relevant.
 - **AI invocation:** button changes to deterministic loading state; existing page remains intact.
 - **AI failure:** inline panel text: “AI investigation is unavailable. Deterministic investigation evidence remains available.”
-- **Evidence validation failure:** do not render unvalidated generated findings; show validation failure state.
-- **Follow-up:** 1–500 chars, one submit; after accepted, disable permanently for that investigation.
+- **Follow-up:** 1–500 chars; reserve one submission while in progress and disable permanently only after a successful follow-up. Configuration/provider/infrastructure failure restores the available control.
 - **Follow-up exhausted:** show “Follow-up already used”; do not auto-retry 409.
 - **Historical alert context:** visible badge beside cutoff, e.g. “Historical context from Alert ALT-…”.
 - **Detector detail expansion:** accordion under Account identity; no raw technical values dominate initial view.
@@ -361,92 +349,53 @@ All use the same top navigation, dark navy design tokens, table density, semanti
 
 ## 9. EXACT DESIGN TOKENS
 
+The executable token source is `frontend/src/styles.css`; chart/map tokens are composed in `frontend/src/theme/chartTheme.ts`. Representative frozen semantic values are:
+
 ```css
 :root {
-  --bg-page: #07111D;
-  --bg-header: #0A1624;
-  --bg-surface: #0D1B2A;
-  --bg-surface-2: #102235;
-  --bg-inset: #081522;
-  --bg-hover: #132A3E;
+  /* Dark / default: neutral graphite */
+  --bg-app: #0F1216;
+  --bg-surface: #171B21;
+  --bg-surface-subtle: #1D222A;
+  --border-subtle: #2C333D;
+  --text-primary: #F1F5F9;
+  --text-secondary: #AAB4C0;
+  --accent: #4EA1D3;
+  --focus-ring: #60A5FA;
 
-  --border-subtle: #1C3448;
-  --border-strong: #2A4A62;
-
-  --text-primary: #F3F7FA;
-  --text-secondary: #B9C7D3;
-  --text-muted: #7F94A6;
-  --text-disabled: #587083;
-
-  --interactive: #58BCEB;
-  --interactive-hover: #7DD0F3;
-  --focus: #79D5FF;
-  --evidence-focus: #53E0D2;
-  --evidence-focus-bg: #0C2A2B;
-
-  --high: #FF6B6B;
-  --high-bg: #2A171C;
-  --medium: #F6B94D;
-  --medium-bg: #2A2214;
-  --low: #8FA9BA;
-  --low-bg: #172531;
-  --unscored: #9AA9B5;
-  --unscored-bg: #111B25;
-
-  --status-not-reviewed: #98A8B6;
-  --status-in-review: #5CA9FF;
-  --status-reviewed: #9A8CFF;
-
-  --ai-detector: #7F8CFF;
-  --ai-observed: #55C7E8;
-  --ai-interpretation: #B58AF2;
+  --status-high-text: #FDA29B;
+  --status-medium-text: #FDB022;
+  --status-low-text: #A9C0D3;
+  --status-unscored-text: #98A2B3;
 
   --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-
-  --fs-11: 11px;
-  --fs-12: 12px;
-  --fs-13: 13px;
-  --fs-14: 14px;
-  --fs-16: 16px;
-  --fs-20: 20px;
-  --fs-24: 24px;
-  --fs-30: 30px;
-
-  --weight-regular: 400;
-  --weight-medium: 500;
-  --weight-semibold: 600;
-  --weight-bold: 700;
-
-  --lh-tight: 1.2;
-  --lh-normal: 1.45;
-  --lh-reading: 1.6;
-
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
-
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-lg: 12px;
-
-  --border-width: 1px;
-  --shadow-raised: 0 8px 24px rgba(0,0,0,.22);
-  --shadow-focus: 0 0 0 3px rgba(121,213,255,.20);
-
   --header-height: 56px;
   --content-max: 1480px;
-  --table-row-height: 44px;
   --control-height: 36px;
-  --button-height: 36px;
+}
+
+[data-theme="light"] {
+  --bg-app: #F4F6F8;
+  --bg-surface: #FFFFFF;
+  --bg-surface-subtle: #F8FAFC;
+  --border-subtle: #E2E8F0;
+  --text-primary: #172033;
+  --text-secondary: #526071;
+  --accent: #1677C8;
+  --focus-ring: #2F8ED6;
+
+  --status-high-text: #B42318;
+  --status-medium-text: #B54708;
+  --status-low-text: #4F6B83;
+  --status-unscored-text: #475467;
 }
 ```
+
+LOW is intentionally cool blue-gray and UNSCORED is neutral gray in both modes; LOW is never green and UNSCORED never masquerades as LOW. Map root/connected-country and incoming/outgoing meanings remain separately tokenized and unchanged across modes.
 
 Body: 14px/1.45. Detail prose: 14–16px. Page titles: 24px/1.2/700. IDs: 12–13px mono. Avoid body text below 12px.
 
@@ -494,7 +443,7 @@ Body: 14px/1.45. Detail prose: 14–16px. Page titles: 24px/1.2/700. IDs: 12–1
 - indicators: 3 columns at ≥1280, 2 columns 1000–1279, 1 below;
 - activity chart: full width, height 300px;
 - local network: full width, height 380px;
-- AI: full width with inner 7/5 split only after successful findings if evidence preview is open;
+- AI: full width with direct analyst-summary sections;
 - evidence table: full width.
 
 ### Account Detail
@@ -506,10 +455,9 @@ Body: 14px/1.45. Detail prose: 14–16px. Page titles: 24px/1.2/700. IDs: 12–1
 - country flows/alert history: 6/6 columns;
 - AI: full width.
 
-### AI Investigation / Evidence state
+### AI Investigation state
 - detail content remains the page;
-- AI section becomes 5-column findings + 7-column deterministic/evidence focus region at ≥1280;
-- at narrower widths stack deterministic focus first, AI second;
+- AI summary remains within the existing full-width detail-page section;
 - no modal that hides the deterministic page.
 
 ### Breakpoints
@@ -550,9 +498,7 @@ Body: 14px/1.45. Detail prose: 14–16px. Page titles: 24px/1.2/700. IDs: 12–1
 | `CounterpartiesTable` | concrete relationship records | pagination/focus | Account detail |
 | `EvidenceTable` | bounded supporting evidence records | focused rows | both details |
 | `AIInvestigation` | bounded grounded assistant | idle/loading/success/partial/unavailable/error | both details |
-| `AIFinding` | category + text + citations | focused citation | AI |
-| `EvidenceCitation` | backend label → evidence target | pressed/focus | AI |
-| `EvidenceFocusState` | accessible deterministic highlight | active/clear | details |
+| `InvestigationSummary` | summary + observations + patterns + attention points + limits | success/partial | AI |
 | `FollowUpControl` | one bounded follow-up | idle/loading/used/error | AI |
 | `DetectorDetailsDisclosure` | score/rank/percentile/version/policy | collapsed/expanded | Account |
 | `LoadingState` | deterministic section/page loading | accessible live region | all |
@@ -638,24 +584,20 @@ Engine: ECharts `graph` series, deterministic/circular layout.
 - **UI-03 Accounts** defines: account directory identity pattern, Bank Country display, band labels, activity-count columns.
 - **UI-04 Transaction Detail** defines: exact investigation hierarchy, priority summary, route map, facts, account cards, indicators, timeline, graph, AI, evidence.
 - **UI-05 Account Detail** defines: account identity strip, historical context badge, observed activity, one-hop graph, transaction/counterparty split, charts, alert history, AI.
-- **UI-06 AI + Evidence Focus** defines: finding categories, citation controls, evidence focus treatment, supporting-row highlight, follow-up states.
+- **UI-06 AI Investigation** defines: direct structured summary sections and follow-up states.
 
 Implementation screenshots should be compared against these six approved references at approximately 1440px whenever the image files are supplied to the worker/user.
 
 ---
 
-## 14. IMPLEMENTATION NOTES FOR WP05A
+## 14. INTEGRATED IMPLEMENTATION CONSTRAINTS
 
-- Replace the V1 CaseSelector/one-case page architecture.
-- Remove active `case_ref`, Person/Merchant, and Synthetic Region UI semantics.
-- Preserve only reusable infrastructure patterns that do not conflict with V2.
-- The existing V1 evidence-click → deterministic target focus pattern is worth adapting.
-- The existing AI-failure principle is worth retaining.
-- Do not copy V1 factual types into V2.
+- Do not reintroduce CaseSelector, `case_ref`, Person/Merchant, Synthetic Region, or V1 evidence semantics.
+- Preserve deterministic Evidence V2 components outside the AI summary and AI-failure resilience.
 - Do not calculate detector or investigation facts in TypeScript.
 - Keep list filters in URL query parameters where practical.
-- Use real `/api/v2` endpoints whenever available.
-- Use typed V2 mocks only where the frozen WP05A contract explicitly permits them.
+- Normal runtime uses real `/api/v2` endpoints.
+- Typed V2 fixtures are available only through the explicit fixture-development entrypoint.
 - Bundle world GeoJSON locally.
 - Prefer DOM labels around ECharts for critical semantics/accessibility.
 
@@ -668,10 +610,10 @@ Implementation screenshots should be compared against these six approved referen
 3. **Bank flags:** optional. Country names/ISO are authoritative; flags should not become the primary semantic cue.
 4. **Map labels:** ECharts text can become cramped; critical route labels should live in DOM outside the map.
 5. **Graph density:** max-25 still gets dense at laptop widths; prioritise labels for root/selected relationship and use tooltips for the rest.
-6. **AI evidence focus across page sections:** a persistent but non-modal focus indicator is required so the analyst can see both the citation source and deterministic target.
+6. **AI summary hierarchy:** generated synthesis must remain visually subordinate to authoritative deterministic detail sections.
 7. **Historical account context:** UI must make historical origin/cutoff visible enough that users do not mistake it for current state.
 
-No frozen-design contradiction was found in the inspected required V2 documents. The current V1 implementation is incompatible mainly at the information-architecture and domain-type level, not because its low-level React patterns are unusable.
+No frozen-design contradiction remains in the integrated V2 frontend contract.
 
 ---
 
@@ -693,12 +635,15 @@ Approve only if all are true:
 - [ ] Account graph is bounded one-hop only.
 - [ ] Timeline separates currencies.
 - [ ] AI is subordinate to deterministic evidence.
-- [ ] Evidence citations visibly focus deterministic UI/supporting rows.
+- [ ] AI visibly separates Summary, Key observations, Patterns noticed, and optional Limits without an advice section.
 - [ ] AI loading/error does not hide deterministic content.
 - [ ] Exactly one follow-up is supported.
+- [ ] System / Light / Dark modes render the same layouts and semantic meanings, and the explicit choice persists.
+- [ ] Normal development and production builds contain no fixture fallback; fixture mode is an explicit development command.
+- [ ] Detail workspaces are route-level lazy-loaded so the initial list-route bundle does not import both detail pages.
 - [ ] Design is readable around 1440px and usable on narrower laptops.
 - [ ] Design is implementable with React + TypeScript + Vite + ECharts without inventing backend facts.
 
 ## 18. IMPLEMENTATION AUTHORITY
 
-Frontend delivery is split into the runnable job tickets `implementation/WP05A_FRONTEND_FOUNDATION.md` and `implementation/WP05B_FRONTEND_API_INTEGRATION.md`. WP05A reproduces this approved design against typed V2 mocks; WP05B connects the same UI to real `/api/v2` responses. Neither package may redesign this file. Backend mismatches are reported to the owning backend package/Manager.
+The integrated frontend under `frontend/src/` is authoritative for executable V2 behavior and is constrained by this design contract. Historical WP05 job tickets document delivery history only. Normal runtime connects to `/api/v2`; explicit fixture mode exists only for isolated development and contract work.

@@ -1,5 +1,7 @@
 # TRAILSIGHT V2 — WP04A REST API AND RUNTIME STATE
 
+> **Historical implementation ticket — complete.** Do not use this file as a current runbook.
+
 ## PACKAGE
 WP04A — Deterministic REST API and Minimal Runtime State
 
