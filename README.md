@@ -1,4 +1,4 @@
-# Trailsight V2
+# Trailsight
 
 Trailsight is a local investigation app. It helps an analyst explore unusual patterns in financial transactions. It organizes accounts and transactions that may deserve a closer look. It explains their place in the review queue and keeps the underlying facts visible.
 
