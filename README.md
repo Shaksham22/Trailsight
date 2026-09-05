@@ -1,102 +1,151 @@
 # Trailsight V2
 
-Trailsight is a local analyst workspace for investigating review-prioritized activity in the synthetic IBM AMLworld HI-Small benchmark. It combines reproducible graph-based prioritization, deterministic historical context, Evidence V2, bounded REST/MCP interfaces, and an optional grounded LLM investigation. The analyst retains judgment.
+Trailsight is a local investigation app. It helps an analyst explore unusual patterns in financial transactions. It organizes accounts and transactions that may deserve a closer look. It explains their place in the review queue and keeps the underlying facts visible.
 
-Trailsight does **not** decide that an account or transaction is money laundering, assign laundering probabilities, block transactions, or recommend regulatory action.
+The app uses artificial transaction data from IBM, not real customer data. It can also use artificial intelligence (AI). The AI writes an optional summary based only on facts supplied by the app.
 
-## Architecture
+Trailsight does **not** decide that money laundering happened. It does not calculate the probability that someone committed a crime. It does not block a payment or tell an analyst to file a report. A person must review the information and make the final judgment.
+
+## Data and research credits
+
+Trailsight builds on work created by IBM and the GARG-AML researchers. These sources deserve direct credit.
+
+**AML** means anti-money laundering: the work of finding and investigating activity that may involve attempts to hide the illegal source of money.
+
+### IBM: artificial transaction data
+
+The transaction data comes from IBM's [AML-Data project](https://github.com/IBM/AML-Data), commonly called AMLworld. IBM generated the data inside a computer-made world of banks, people, and companies. The records are artificial. They are not real transactions with names removed.
+
+Trailsight uses the **HI-Small** file from that project. HI-Small is IBM's name for this particular artificial transaction file. IBM includes hidden labels that act like an answer key for testing.
+
+Trailsight keeps that answer key out of the running app. This means the pattern-finding calculation cannot use IBM's answers while producing its own results. The raw IBM file is not included in this repository. IBM publishes the data under the [CDLA-Sharing-1.0 license](https://spdx.org/licenses/CDLA-Sharing-1.0.html).
+
+### GARG-AML: account-pattern research
+
+**GARG-AML** stands for Graph-Aided Risk Guarding for Anti-Money Laundering. The account-pattern calculation in Trailsight is based on this research.
+
+GARG-AML was created by Bruno Deprez, Bart Baesens, Tim Verdonck, and Wouter Verbeke. Credit goes to their [GARG-AML research paper](https://arxiv.org/abs/2506.04292) and [public source code](https://github.com/B-Deprez/GARG-AML).
+
+In simple terms, GARG-AML turns transfers into a map. Accounts are points, and transactions connect those points. It looks at an account, the accounts directly connected to it, and the next layer of connections.
+
+GARG-AML then measures whether that small part of the map resembles **smurfing**. Smurfing is a pattern in which money is moved through several accounts, often in smaller transfers, to make the trail harder to follow.
+
+Trailsight uses the basic, undirected version of the GARG-AML calculation. Here, “undirected” means it studies whether accounts are connected without using the sending direction as a separate part of the score.
+
+Trailsight ranks accounts that have enough connection data. It then places them into HIGH, MEDIUM, or LOW **review bands**, which help order an analyst's work. These bands are Trailsight's own review rules. They are not official rules from the GARG-AML authors, proof of money laundering, or probabilities.
+
+Trailsight is the app in this repository that brings these pieces together. The IBM data and GARG-AML research remain the work of their original creators.
+
+## How Trailsight works
 
 ```text
-IBM HI-Small transactions
-  -> prepared runtime-safe DuckDB
-  -> GARG detector snapshots, review bands, priorities, and alerts
-  -> deterministic investigation domain + Evidence V2
-  -> FastAPI /api/v2 + bounded local stdio MCP
-  -> optional grounded LLM investigation
-  -> React analyst workspace
+IBM's artificial HI-Small transactions
+  -> a safe local database without IBM's hidden answers
+  -> GARG-AML examines connections between accounts
+  -> Trailsight saves daily results and orders items for review
+  -> the app gathers the relevant facts for each investigation
+  -> an optional AI summary explains those supplied facts
+  -> the analyst reviews everything in the web interface
 ```
 
-FastAPI, MCP, and the React client consume the same deterministic domain contracts. The model receives bounded application-owned context and can cite only Evidence V2 IDs made available during that run.
+The server, web interface, and optional AI feature use the same saved facts. Normal application code calculates the counts, dates, amounts, account connections, review bands, and transaction priorities. The AI does not invent these facts.
 
-## Ground-truth firewall
+Trailsight saves one set of account-pattern results for each day instead of recalculating them when a page opens. A past investigation therefore uses only information that was available by its stated date. The same prepared data and settings produce the same result.
 
-IBM's `Is Laundering` label and hidden pattern annotations are offline-evaluation inputs only. They are excluded from the runtime DuckDB, API, frontend, Evidence, MCP, prompts, AI context, and runtime telemetry. Detector outputs are produced before any separate offline comparison with benchmark truth.
+### Key words used in the app
 
-Bank Country is deterministic synthetic **bank metadata**. It is not customer residence, nationality, physical location, domicile, or country risk.
+- **Account:** one Bank ID and Account ID from the artificial IBM data.
+- **Directly connected account or counterparty:** an account that sent money to, or received money from, the selected account.
+- **Review band:** HIGH, MEDIUM, or LOW placement used to order account reviews. An account with too little connection data is shown as **Insufficient Network Context**.
+- **Transaction review priority:** a work-ordering label based on the saved review bands of the sender and receiver at that time.
+- **Network Pattern Alert:** a record created when an account enters, or re-enters, the HIGH review band.
+- **Detector cutoff:** the date and time when the GARG-AML result used on the page was calculated.
+- **Supporting records:** the limited facts and transaction examples supplied for an investigation.
+- **AI assessment:** an optional written summary of supplied facts. It does not replace those facts or the analyst's judgment.
+
+## How Trailsight keeps IBM's test answers separate
+
+IBM provides an `Is Laundering` field and separate pattern labels for checking the pattern-finding results. Think of these labels as the answer sheet for a test. Trailsight removes them before building the database used by the app. The pattern calculation, server, web interface, AI prompt, AI tools, and run logs cannot read them.
+
+Only a separate test, run outside the app, may compare already-finished results with IBM's labels. In other words, Trailsight must produce its answer before it is allowed to look at IBM's answer.
+
+IBM provides artificial Bank IDs but not customer locations. Trailsight consistently assigns a country to each artificial bank so routes can be shown on a map. “Bank Country” describes the bank in this artificial display. It does **not** describe where a customer lives, their nationality, or the risk of a country.
 
 ## Product screenshots
 
-### Analyst workspaces
+### Main pages
 
-**Network Pattern Alerts.** Review-prioritized accounts are presented with their Bank Country metadata, detector cutoff, entry reason, and human workflow status.
+**Network Pattern Alerts.** This queue shows accounts placed in the HIGH review band. It also shows when the result was calculated, why the alert appeared, and whether a person has reviewed it.
 
 ![Trailsight Network Pattern Alerts queue](docs/assets/alerts-queue.png)
 
-**Transaction browser.** Server-driven search and filters provide a bounded view of transaction facts, endpoint identities, currencies, formats, and review priorities.
+**Transaction browser.** Search and filters help an analyst find transfers and compare their date, sender, receiver, amount, currency, payment method, and review priority.
 
 ![Trailsight transaction browser](docs/assets/transactions-browser.png)
 
-**Account directory.** Canonical Bank and Account identities appear alongside the latest completed network-review context and directional activity counts.
+**Account directory.** Each row shows a consistent Bank and Account identity, its latest review band, and the number of incoming and outgoing transactions.
 
 ![Trailsight account directory](docs/assets/accounts-directory.png)
 
 ### Account investigation
 
-**Account overview.** The primary investigation view brings together identity, detector standing, directional transaction activity, counterparties, and same-currency comparisons.
+**Account overview.** This view identifies the account and shows how highly it ranked for review. It also shows incoming transfers, outgoing transfers, and the number of other accounts involved. Money is compared only when the currencies match.
 
 ![Trailsight Account Investigation overview](docs/assets/account-investigation-overview.png)
 
-**Bounded AI assessment.** The optional structured assessment summarizes supplied facts, observations, patterns, and material limits while preserving a single bounded follow-up.
+**Optional AI assessment.** The AI turns the facts supplied by Trailsight into a summary, key observations, possible patterns, and important limits. The analyst may ask one follow-up question about the same information.
 
 ![Trailsight Account Investigation AI assessment](docs/assets/account-ai-assessment.png)
 
-**Network and Bank-Country flows.** A world-context flow map and bounded one-hop account graph show international bank metadata and transaction direction side by side.
+**Account connections and Bank-Country flows.** The map shows which artificial Bank Countries exchanged transfers. The account diagram shows the selected account and the accounts directly connected to it. Arrows show the direction of each transfer.
 
 ![Trailsight Account Investigation network and Bank-Country flows](docs/assets/account-network-and-bank-country-flows.png)
 
-**Flow and relationship detail.** Bank-Country aggregates, per-currency activity, and direct counterparty counts retain their separate deterministic measures.
+**Flow and relationship detail.** The tables and chart break activity down by Bank Country, currency, and directly connected account. Counts and money amounts remain separate so unlike currencies are never added together.
 
 ![Trailsight Account Investigation flow summary and direct counterparties](docs/assets/account-flow-summary-and-counterparties.png)
 
-**Historical investigation context.** Alert history and bounded transaction records connect the account’s review state to the underlying activity.
+**Alert and transaction history.** The analyst can see when the account entered the HIGH review band and inspect the relevant transfers behind the account activity.
 
 ![Trailsight Account Investigation alert history and transactions](docs/assets/account-alert-history-and-transactions.png)
 
 ### Transaction investigation
 
-**Transaction overview.** Review priority and its endpoint-band derivation sit above the transfer summary and synthetic Bank-Country route.
+**Transaction overview.** This view shows the transfer's review priority and explains how the sender's and receiver's account bands produced it. The map shows the route between the two artificial Bank Countries.
 
 ![Trailsight Transaction Investigation overview](docs/assets/transaction-investigation-overview.png)
 
-**Structured transaction assessment.** The shared AI investigation surface describes the transaction, key observations, cross-fact patterns, and meaningful limits.
+**Optional transaction AI assessment.** The AI explains the supplied transfer facts, lists useful observations, connects related facts into possible patterns, and states important limits.
 
 ![Trailsight Transaction Investigation AI assessment](docs/assets/transaction-ai-assessment.png)
 
-**Facts and endpoint context.** Exact transfer facts are followed by sender and receiver account state at the applicable historical cutoff.
+**Transfer facts and account information.** Exact transfer details appear first. The sender's and receiver's account information follows, using what was known at the time of the investigation.
 
-![Trailsight Transaction Investigation facts and endpoint accounts](docs/assets/transaction-facts-and-endpoints.png)
+![Trailsight Transaction Investigation facts and sender and receiver accounts](docs/assets/transaction-facts-and-endpoints.png)
 
-**Deterministic indicators.** Endpoint bands, amount-history comparisons, relationship history, recent velocity, and currency-route facts remain directly inspectable.
+**Calculated investigation facts.** The app shows account bands, earlier amounts, previous interactions, recent transfer counts, and the currency route. Normal application code calculates these facts. They do not come from AI-generated text.
 
-![Trailsight Transaction Investigation endpoint accounts and deterministic indicators](docs/assets/transaction-endpoints-and-indicators.png)
+![Trailsight Transaction Investigation sender and receiver accounts and calculated facts](docs/assets/transaction-endpoints-and-indicators.png)
 
-**Activity and local network.** A sender-rooted 30-day activity view and bounded one-hop graph provide temporal and relationship context without cross-currency aggregation.
+**Recent activity and account connections.** The chart shows the sender's previous 30 days of activity. The account diagram shows directly connected accounts. Amounts in different currencies are kept separate.
 
 ![Trailsight Transaction Investigation activity and local network](docs/assets/transaction-activity-and-network.png)
 
-**Supporting evidence.** Evidence categories and their bounded supporting transaction rows remain visible beneath the investigation narrative.
+**Supporting records.** The final section lists the fact groups used by the investigation and the limited set of transaction rows supplied as supporting examples.
 
 ![Trailsight Transaction Investigation supporting evidence](docs/assets/transaction-supporting-evidence.png)
 
-## Prerequisites
+## What you need
+
+The remaining sections are for people who want to run or inspect the project. You do not need them to understand the product overview above.
 
 - Python 3.12 or newer
-- [uv](https://docs.astral.sh/uv/)
-- Node.js `20.19+` or `22.12+` and npm
-- an externally obtained IBM AMLworld HI-Small transaction CSV when preparing the database
-- optionally, an OpenAI API key and an API model available to your project
+- [uv](https://docs.astral.sh/uv/) to install and run the Python parts
+- Node.js `20.19+` or `22.12+`, plus npm, the tool that installs and starts the web interface
+- the IBM AMLworld `HI-Small_Trans.csv` file when building the local database
+- optionally, a private OpenAI API key and the name of an OpenAI model enabled for your project if you want AI summaries
 
-Raw IBM data and generated DuckDB files are intentionally not committed.
+The raw IBM data and the generated local database are intentionally not stored in this repository.
 
 ## One-time setup
 
@@ -106,11 +155,11 @@ uv sync --frozen
 npm --prefix frontend ci
 ```
 
-The checked-in `.env.example` contains no secret. Edit only the untracked `.env` file for local paths and optional AI settings.
+The included `.env.example` file contains no secret information. Put local file paths and optional AI settings in `.env`. Git is configured not to include that file.
 
-## Prepare the database when it is absent
+## Build the local database
 
-Point `--source` at the external HI-Small transaction CSV. Preparation strips hidden truth from the product path and creates the runtime-safe database:
+Run this when the local database does not exist. Replace the example source path with the location of your IBM `HI-Small_Trans.csv` file. This step removes IBM's hidden answer fields. It then creates a local database using DuckDB, the database program used by Trailsight:
 
 ```bash
 uv run python scripts/v2_data_prepare.py \
@@ -118,18 +167,18 @@ uv run python scripts/v2_data_prepare.py \
   --output data/v2/runtime/trailsight_v2.duckdb
 ```
 
-Then materialize detector snapshots, account review bands, transaction priorities, and alerts:
+Next, calculate and save the daily GARG-AML account results, Trailsight review bands, transaction priorities, and alerts:
 
 ```bash
 uv run python scripts/v2_detector_prepare.py \
   --database data/v2/runtime/trailsight_v2.duckdb
 ```
 
-These are offline preparation commands, not backend startup behavior. Full detector preparation can be long-running; the web app never regenerates it on request. See [Data and detector](docs/02_DATA_AND_DETECTOR.md) for the data contract and offline-evaluation isolation.
+These preparation commands run separately from the web app and may take a long time on the full dataset. Opening a page never starts this calculation. See the [technical data and GARG-AML guide](docs/02_DATA_AND_DETECTOR.md) for details.
 
 ## Start Trailsight
 
-Start the backend from the repository root. `--env-file` loads the documented local paths without repeated shell exports:
+Open a terminal in the repository's main folder and start the Python server:
 
 ```bash
 uv run uvicorn trailsight_v2.api.app:create_app \
@@ -139,27 +188,27 @@ uv run uvicorn trailsight_v2.api.app:create_app \
   --port 8000
 ```
 
-In another terminal, start the normal real-API frontend:
+Open a second terminal and start the web interface:
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies `/api` to FastAPI on port 8000. There is no silent fixture fallback.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173) in a browser. During local development, the web interface sends its data requests to the Python server on port 8000.
 
-Check backend readiness at [http://127.0.0.1:8000/api/v2/health](http://127.0.0.1:8000/api/v2/health). Startup fails safely if the prepared database is missing or invalid.
+Use the [server health page](http://127.0.0.1:8000/api/v2/health) to check whether the Python server is ready. The server will refuse to start if the prepared database is missing or has the wrong structure.
 
-Fixture development is explicit and isolated from normal builds:
+For frontend work without the real Python server, start the clearly separated sample-data mode:
 
 ```bash
 cd frontend
 npm run dev:fixture
 ```
 
-## Optional AI configuration
+## Optional AI summaries
 
-Set these only in the untracked root `.env`:
+The app works without AI. An API key is a private code that allows the server to call OpenAI. To enable AI-written summaries, add the following values to the local `.env` file. That file belongs in the repository's main folder:
 
 ```text
 OPENAI_API_KEY=<local secret>
@@ -167,17 +216,21 @@ TRAILSIGHT_MODEL=<exact API model identifier available to your project>
 TRAILSIGHT_PROMPT_VERSION=investigation-v2
 ```
 
-`GET /api/v2/health` reports `ai_configured: true` when both `OPENAI_API_KEY` and `TRAILSIGHT_MODEL` are non-empty. Prompt/provider validation occurs when an investigation starts. When AI is unconfigured or unavailable, every deterministic list, detail, workflow, visualization, and Evidence V2 path remains usable.
+The health page reports `ai_configured: true` when both `OPENAI_API_KEY` and `TRAILSIGHT_MODEL` have values. The app checks the AI setup when an investigation starts. If AI is unavailable, the rest of the app still works. This includes lists, detail pages, the review process, charts, maps, and supporting facts.
 
-Start a real investigation from an Account or Transaction detail page using **Investigate**. A successful initial investigation permits exactly one successful follow-up. Configuration, infrastructure, or provider failure does not consume that follow-up; a request after successful consumption returns `FOLLOW_UP_ALREADY_USED`.
+Select **Investigate with AI** on an Account or Transaction page to create a summary. After a successful summary, the analyst may ask one follow-up question about the same supplied facts. A technical failure does not use up that follow-up.
 
-One sanitized JSONL record per handled AI run is written to `TRAILSIGHT_TRACE_PATH` (default `data/traces/investigations-v2.jsonl`). The file records model/prompt provenance, bounded MCP call metadata, timing, usage, tool-returned evidence IDs, structural-validation state, and failure code. It does not store API keys, chat transcripts, model reasoning, generated prose, full evidence payloads, or hidden benchmark truth.
+For each AI run, the server writes one small technical log entry to `TRAILSIGHT_TRACE_PATH`. By default, this file is `data/traces/investigations-v2.jsonl`.
 
-OpenAI recommends keeping API keys server-side in environment variables; never place the key in `frontend/.env*` or browser code. See the [official OpenAI API documentation](https://developers.openai.com/api/docs/quickstart).
+The log records the model and instructions used. It also records which limited app tools ran, timing, and AI input and output size. Finally, it records references to returned facts, whether required sections were present, and any error code.
 
-## Validation
+The log does not store API keys, the conversation, private model reasoning, generated text, full supporting records, or IBM's hidden answers.
 
-The final deterministic validation sequence is:
+Keep the OpenAI API key only in the server's `.env` file. Never place it in `frontend/.env*` or in code sent to the browser. See the [official OpenAI API documentation](https://developers.openai.com/api/docs/quickstart).
+
+## Check that the project works
+
+Run the following checks:
 
 ```bash
 uv run pytest tests/v2
@@ -189,31 +242,33 @@ npm run test:contracts
 npm run build
 ```
 
-The non-live eval harness is credential-free and makes no paid model call. It validates the frozen scenario contract through an independent mocked execution path. A real-model investigation remains a separate manual acceptance step.
+The automated AI check does not connect to OpenAI, need an API key, or make a paid model call. It uses a fake AI service made only for tests. A person must separately check one summary from the real AI service.
 
-## Important V2 limitations
+## Important limits
 
-- Local single-process MVP; `runtime_state.json` is not a multi-worker state service.
-- No authentication, user accounts, production deployment, or cloud control plane.
-- Review workflow is `NOT_REVIEWED -> IN_REVIEW -> REVIEWED`; `REVIEWED` is terminal.
-- GARG review bands prioritize analyst attention; they are not laundering probabilities.
-- Transaction activity context is fixed to **Sender Activity — Prior 30 Days**.
-- Account Network shows at most 24 counterparties plus the root; truncation is explicit.
-- Model/MCP network context remains capped at 12; Evidence samples remain bounded.
-- Account Detail Bank-Country Flows include all aggregated connections for the resolved context and have no arbitrary top-12 limit.
-- Alert History returns the latest 100 rows with explicit total/truncation metadata.
-- AI is a bounded investigation aid, not a generic chatbot, and permits one successful follow-up.
+- Trailsight is a local demonstration project designed to run as one server process. It is not a multi-server production system.
+- It has no sign-in system, user accounts, public hosting setup, or tools for managing a cloud service.
+- An alert moves from **Not reviewed** to **In review** to **Reviewed**. A reviewed alert cannot be moved backward.
+- GARG-AML review bands only help order an analyst's work. They are not probabilities and do not prove money laundering.
+- The transaction activity chart always shows the sender's previous 30 days.
+- An Account Network diagram shows the selected account and no more than 24 directly connected accounts. The page states when more accounts exist.
+- The optional AI receives no more than 12 directly connected accounts and only limited supporting examples.
+- The Account Bank-Country map and table include all country-level connections available for the selected account and date.
+- Alert History shows the latest 100 entries and states when older entries exist.
+- The AI feature answers questions only about the supplied investigation facts. It is not a general chatbot, and it allows one successful follow-up.
 
-## Authoritative documentation
+## Detailed technical documentation
 
-- [Product contract](docs/00_PRODUCT_CONTRACT.md)
-- [System architecture](docs/01_SYSTEM_ARCHITECTURE.md)
-- [Data and detector](docs/02_DATA_AND_DETECTOR.md)
-- [Investigation domain and Evidence V2](docs/03_DOMAIN_AND_EVIDENCE.md)
-- [REST API and MCP](docs/04_API_AND_MCP.md)
-- [AI and evaluation](docs/05_AI_AND_EVALUATION.md)
-- [Frontend UX](docs/06_FRONTEND_UX.md)
-- [Runtime and configuration](docs/07_RUNTIME_AND_DEPLOYMENT.md)
-- [Testing and acceptance](docs/08_TESTING_AND_ACCEPTANCE.md)
+These files are for readers who want implementation details:
 
-`docs/09_IMPLEMENTATION_ROADMAP.md` and `docs/implementation/` preserve implementation history; they are not startup or release runbooks.
+- [What the product promises](docs/00_PRODUCT_CONTRACT.md)
+- [How the parts fit together](docs/01_SYSTEM_ARCHITECTURE.md)
+- [How the data and GARG-AML calculation are prepared](docs/02_DATA_AND_DETECTOR.md)
+- [How investigation facts are organized (called Evidence V2 in the code)](docs/03_DOMAIN_AND_EVIDENCE.md)
+- [How other software can request data from Trailsight (REST API and MCP)](docs/04_API_AND_MCP.md)
+- [How the AI is limited and checked](docs/05_AI_AND_EVALUATION.md)
+- [How the web interface is designed](docs/06_FRONTEND_UX.md)
+- [How to start and configure the app](docs/07_RUNTIME_AND_DEPLOYMENT.md)
+- [How the project is tested](docs/08_TESTING_AND_ACCEPTANCE.md)
+
+`docs/09_IMPLEMENTATION_ROADMAP.md` and `docs/implementation/` preserve the project's implementation history. They are not instructions for starting or releasing the app.
