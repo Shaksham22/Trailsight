@@ -61,11 +61,11 @@ The primary workflow is:
 1. Analyst lands on **Alerts**.
 2. Analyst filters the account-native Network Pattern Alert queue.
 3. Opening an alert navigates to **Account Detail** with historical origin context preserved.
-4. Account Detail shows the account’s Network Review Band, detector cutoff, observed activity, bounded one-hop relationships, transactions, indicators, and alert history.
+4. Account Detail opens with a canvas-level account overview and AI assessment, followed by paired Bank-Country/network analytics, supporting activity, workflow history, and transactions.
 5. Analyst opens one or more related transactions.
-6. **Transaction Detail** first explains AML Review Priority and its endpoint-band derivation, then shows exact transaction facts and deterministic indicators.
-7. AI can be invoked after deterministic context is visible.
-8. AI displays the model's structured summary, observations, patterns, attention points, and limits directly.
+6. **Transaction Detail** first explains AML Review Priority and its endpoint-band derivation, then places the optional AI assessment before exact transaction facts and deterministic indicators.
+7. AI is never automatic; the analyst invokes it from the compact assessment state.
+8. AI displays the model's structured summary, observations, patterns, and genuinely non-empty limits directly.
 9. Analyst may use one follow-up.
 10. Review workflow progress is changed only on the Network Pattern Alert: NOT_REVIEWED → IN_REVIEW → REVIEWED.
 
@@ -221,23 +221,28 @@ Columns:
 Account click → Account Detail in latest completed detector context.
 
 ### UI-04 — Transaction Detail / Investigation
-Render in this exact high-level order:
+Render in this high-level order:
 
 1. **AML Review Priority**
    - compact priority label;
    - backend-returned derivation;
    - endpoint band contribution;
    - detector cutoff;
-   - explicit “review priority, not verdict” helper.
+   - no repetitive disclaimer callout.
 
-2. **Transaction Summary + Bank-Country Route**
+2. **AI Assessment**
+   - compact action state before generation;
+   - direct structured Summary, Key observations, Patterns noticed, and optional Limits after generation;
+   - one follow-up.
+
+3. **Transaction Summary + Bank-Country Route**
    - left: amount/format/from/to summary;
    - right: ECharts Bank-Country route map.
 
-3. **Transaction Facts**
+4. **Transaction Facts**
    - ref, timestamp, sender/receiver bank+account, both amounts/currencies, format.
 
-4. **Sender / Receiver Account Cards**
+5. **Sender / Receiver Account Cards**
    - two equal cards;
    - Bank + Account;
    - Bank Country;
@@ -246,25 +251,19 @@ Render in this exact high-level order:
    - cutoff;
    - “View Account”.
 
-5. **Deterministic Investigation Indicators**
+6. **Deterministic Investigation Indicators**
    - compact rows/cards;
    - every indicator says what was observed.
 
-6. **Sender Activity — Prior 30 Days**
+7. **Sender Activity — Prior 30 Days**
    - sender-rooted and strictly prior to the resolved historical context;
    - fixed 30-day V2 window; no 7D/30D/90D or sender/receiver selector;
    - currency-separated ECharts timeline;
    - selected transaction marker.
 
-7. **Local Account Network**
+8. **Local Account Network**
    - sender/receiver toggle if both payloads exist;
    - one bounded graph shown at a time.
-
-8. **AI Investigation**
-   - idle/loading/success/partial/unavailable/error;
-   - direct structured analyst-summary sections;
-   - Limits;
-   - one follow-up.
 
 9. **Supporting Transactions / Evidence**
    - bounded dense table rendered from display-ready supporting rows;
@@ -272,28 +271,20 @@ Render in this exact high-level order:
    - evidence-focused rows can highlight.
 
 ### UI-05 — Account Detail / Investigation
-Render in frozen order:
-1. Account identity + Network Review
-2. Observed Activity
-3. Account Network
-4. Transactions / Counterparties
-5. Activity Over Time
-6. Currency Activity
-7. Bank-Country Flows
-8. Alert History
-9. AI Investigation
+Render in this semantic order, without numbered headings:
+1. **Account Overview**, directly on the page canvas: readable Bank / Account identity, Bank Country, Network Review Band, total transaction activity, incoming/outgoing direction percentages and count difference, direct counterparty count, and a plain-language date showing how far the review data extends.
+2. **AI Assessment**, as the second subsection of the opening investigation area.
+3. **Network & Flow Analysis**, with Bank-Country Flows and Account Network in an approximately 60/40 responsive grid.
+4. **Bank-Country Flow Summary**, full width.
+5. **Currency Activity + Direct Counterparties**, side by side while each remains readable.
+6. **Alert History**, full width.
+7. **Transactions**, full width and always the last major account component.
 
-The top identity strip contains:
-- Bank + Account
-- Bank Country
-- Network Review Band
-- detector cutoff
-- structural explanation
-- historical-origin badge when applicable
+Account Overview is not wrapped in the generic bordered Section surface. Aligned bands and subtle separators integrate identity, resolved context, detector status, and observed activity without a grid of standalone metric cards. Prime-screen values are reviewer-oriented: Network Review communicates the detector result, while raw score, rank, percentile, exact cutoff timestamp, snapshot ID, neighborhood measures, and canonical account reference stay available in the collapsed Detector technical details disclosure. The Account Activity Over Time visualization is not rendered on Account Detail; its underlying data remains part of domain and AI context.
 
-Detector technical details are collapsed by default.
+The map and one-hop graph stack at narrower widths, with the secondary activity/counterparty row stacking earlier based on its table width. ECharts observes container resizing. The Transactions table renders the display-ready Account Transactions response directly; only a genuinely selected historical transaction may require one Transaction Detail request. Bank-Country Flows show every aggregate returned for the resolved context. Alert History shows the latest 100 rows with current review status and, when truncated, explicit copy such as “Showing latest 100 of 137 alerts.”
 
-The Transactions table renders the display-ready Account Transactions response directly; only a genuinely selected historical transaction may require one Transaction Detail request. Bank-Country Flows show every aggregate returned for the resolved context. Alert History shows the latest 100 rows with current review status and, when truncated, explicit copy such as “Showing latest 100 of 137 alerts.”
+Visible timestamps use a centralized, explicit UTC presentation such as `Sep 3, 2022 · 9:17 PM UTC`; backend datetime contracts remain unchanged.
 
 ### UI-06 — AI Investigation
 This is not a separate route. It is a focused state of a detail page.
@@ -342,7 +333,7 @@ All use the same top navigation, dark navy design tokens, table density, semanti
 - **AI failure:** inline panel text: “AI investigation is unavailable. Deterministic investigation evidence remains available.”
 - **Follow-up:** 1–500 chars; reserve one submission while in progress and disable permanently only after a successful follow-up. Configuration/provider/infrastructure failure restores the available control.
 - **Follow-up exhausted:** show “Follow-up already used”; do not auto-retry 409.
-- **Historical alert context:** visible badge beside cutoff, e.g. “Historical context from Alert ALT-…”.
+- **Historical alert context:** the overview labels the date as “Data included through” and explains that it is the snapshot used for the review or originating Alert/Transaction. The exact UTC cutoff remains in Detector technical details.
 - **Detector detail expansion:** accordion under Account identity; no raw technical values dominate initial view.
 
 ---
@@ -437,33 +428,32 @@ Body: 14px/1.45. Detail prose: 14–16px. Page titles: 24px/1.2/700. IDs: 12–1
 
 ### Transaction Detail
 - priority summary: 12-column full-width strip;
+- AI Assessment: full width, immediately after priority;
 - summary/map: 12-column grid, left 5 columns / right 7 columns;
 - facts: 4-column fact grid;
 - endpoint account cards: 2 equal columns;
 - indicators: 3 columns at ≥1280, 2 columns 1000–1279, 1 below;
 - activity chart: full width, height 300px;
 - local network: full width, height 380px;
-- AI: full width with direct analyst-summary sections;
 - evidence table: full width.
 
 ### Account Detail
-- identity strip: full width;
-- observed activity: 4 equal compact metric cells;
-- account network: full width 380px;
-- transactions/counterparties: 7/5 columns at ≥1280;
-- activity/currency: 8/4 columns;
-- country flows/alert history: 6/6 columns;
-- AI: full width.
+- canvas-level overview: full width, with identity/context and detector/activity bands;
+- AI Assessment: directly beneath the overview in the same opening area;
+- Bank-Country Flows / Account Network: approximately 60/40 while both remain readable, then stacked;
+- Currency Activity / Direct Counterparties: balanced dashboard row that stacks before the primary visualization row;
+- flow summary, alert history, and transactions: full width;
+- Transactions: last major component.
 
 ### AI Investigation state
 - detail content remains the page;
-- AI summary remains within the existing full-width detail-page section;
+- AI summary remains inline within the full-width detail-page flow;
 - no modal that hides the deterministic page.
 
 ### Breakpoints
-- ≥1280: full desktop grids;
-- 1100–1279: reduce column counts; summary/map becomes 5/7 or 1/1 depending available width;
-- 820–1099: stack major visuals, top nav remains;
+- ≥1180: full desktop grids;
+- 1060–1179: keep the primary map/network row while stacking the wider secondary table row;
+- 820–1059: stack the account dashboard visuals; transaction summary/map also stacks as space requires;
 - <820: table horizontal scrolling is allowed; no separate mobile redesign.
 
 ---
@@ -494,11 +484,11 @@ Body: 14px/1.45. Detail prose: 14–16px. Page titles: 24px/1.2/700. IDs: 12–1
 | `InvestigationIndicatorList` | deterministic observed indicators | evidence-focused | both details |
 | `BankCountryRouteMap` | bank-country route only | same-country/loading/error | Tx detail |
 | `AccountRelationshipGraph` | bounded one-hop canonical graph | root/selected/truncated | both details |
-| `ActivityTimeline` | amount/count history | currency selection/empty | both details |
-| `CounterpartiesTable` | concrete relationship records | pagination/focus | Account detail |
+| `ActivityTimeline` | sender-rooted prior-30-day amount/count history | currency selection/empty | Tx detail |
+| `CounterpartiesTable` | concrete bounded relationship records | focus | Account detail |
 | `EvidenceTable` | bounded supporting evidence records | focused rows | both details |
 | `AIInvestigation` | bounded grounded assistant | idle/loading/success/partial/unavailable/error | both details |
-| `InvestigationSummary` | summary + observations + patterns + attention points + limits | success/partial | AI |
+| `InvestigationSummary` | summary + observations + patterns + optional limits | success/partial | AI |
 | `FollowUpControl` | one bounded follow-up | idle/loading/used/error | AI |
 | `DetectorDetailsDisclosure` | score/rank/percentile/version/policy | collapsed/expanded | Account |
 | `LoadingState` | deterministic section/page loading | accessible live region | all |
@@ -583,7 +573,7 @@ Engine: ECharts `graph` series, deterministic/circular layout.
 - **UI-02 All Transactions** defines: transaction browser filter density, canonical sender/receiver display, money formatting, route text, priority labels.
 - **UI-03 Accounts** defines: account directory identity pattern, Bank Country display, band labels, activity-count columns.
 - **UI-04 Transaction Detail** defines: exact investigation hierarchy, priority summary, route map, facts, account cards, indicators, timeline, graph, AI, evidence.
-- **UI-05 Account Detail** defines: account identity strip, historical context badge, observed activity, one-hop graph, transaction/counterparty split, charts, alert history, AI.
+- **UI-05 Account Detail** defines: canvas overview, integrated AI, paired map/network and currency/counterparty analytics, flow summary, alert history, and final transactions table.
 - **UI-06 AI Investigation** defines: direct structured summary sections and follow-up states.
 
 Implementation screenshots should be compared against these six approved references at approximately 1440px whenever the image files are supplied to the worker/user.
@@ -610,7 +600,7 @@ Implementation screenshots should be compared against these six approved referen
 3. **Bank flags:** optional. Country names/ISO are authoritative; flags should not become the primary semantic cue.
 4. **Map labels:** ECharts text can become cramped; critical route labels should live in DOM outside the map.
 5. **Graph density:** max-25 still gets dense at laptop widths; prioritise labels for root/selected relationship and use tooltips for the rest.
-6. **AI summary hierarchy:** generated synthesis must remain visually subordinate to authoritative deterministic detail sections.
+6. **AI summary hierarchy:** generated synthesis must remain visually distinct from authoritative deterministic facts even when it appears near the top.
 7. **Historical account context:** UI must make historical origin/cutoff visible enough that users do not mistake it for current state.
 
 No frozen-design contradiction remains in the integrated V2 frontend contract.

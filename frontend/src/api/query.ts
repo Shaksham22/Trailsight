@@ -90,3 +90,7 @@ export function buildAccountDetailHref(accountRef: string, origin: AccountOrigin
   const suffix = params.toString();
   return `/accounts/${encodeURIComponent(accountRef)}${suffix ? `?${suffix}` : ""}`;
 }
+
+export function buildTransactionDetailHref(transactionRef: string): string {
+  return `/transactions/${encodeURIComponent(transactionRef)}`;
+}

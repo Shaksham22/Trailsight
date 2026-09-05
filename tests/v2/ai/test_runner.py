@@ -1,11 +1,10 @@
 import asyncio
-from copy import deepcopy
 from decimal import Decimal
 import json
 from pathlib import Path
 
 from trailsight_v2.ai.config import AIConfig, DEFAULT_PROMPT_VERSION, known_prompt_path, prompt_sha256
-from trailsight_v2.ai.context import SeedContextV2, resolve_seed_context
+from trailsight_v2.ai.context import resolve_seed_context
 from trailsight_v2.ai.models import InvestigationStatus, InvestigationSummaryV2
 from trailsight_v2.ai import runner as runner_module
 from trailsight_v2.ai.runner import (
@@ -111,90 +110,75 @@ def test_runner_returns_structured_summary_without_evidence_ids_and_writes_trace
     assert trace["validation_status"] == "PASSED"
 
 
-def _account_seed_with_band(service, selected, band: str) -> SeedContextV2:
-    account_ref = service.get_transaction_detail(
-        selected.ref
-    ).transaction_facts.sender.account_ref
+def test_valid_structured_output_is_not_rejected_by_prose_checks(ai_service, tmp_path) -> None:
+    service, selected, _ = ai_service
     seed = resolve_seed_context(
         service,
         ReviewState(),
-        subject_type=SubjectType.ACCOUNT,
-        subject_ref=account_ref,
+        subject_type=SubjectType.TRANSACTION,
+        subject_ref=selected.ref,
     )
-    packet = deepcopy(seed.model_summary)
-    packet["account_investigation"]["detector"]["network_review_band"] = band
-    return SeedContextV2(seed.context, seed.seed_evidence_ids, packet)
-
-
-def _aligned_low_output() -> InvestigationSummaryV2:
-    return InvestigationSummaryV2(
+    output = InvestigationSummaryV2(
         summary=(
-            "GARG found little evidence of the wider multi-account pattern associated with "
-            "smurfing. Six yen transfers were focused on one banking relationship rather than "
-            "spread across many accounts, which is consistent with the LOW result."
+            "This transaction has LOW review priority because both endpoint accounts have a "
+            "LOW network review band. However, the supplied transfer is unusual in its recent "
+            "context."
         ),
-        observations=[],
-        patterns=[],
+        observations=["The payment amount and currencies are available."],
+        patterns=["Activity is concentrated in one supplied relationship."],
         limits=[],
     )
-
-
-def _misaligned_low_output() -> InvestigationSummaryV2:
-    return InvestigationSummaryV2(
-        summary=(
-            "GARG found little evidence of the wider multi-account pattern associated with "
-            "smurfing. The account instead shows highly concentrated incoming payments and "
-            "several unusual transfers, which raises concern."
-        ),
-        observations=[],
-        patterns=[],
-        limits=[],
-    )
-
-
-def test_aligned_low_output_passes_the_hard_runtime_guard(ai_service, tmp_path) -> None:
-    service, selected, _ = ai_service
-    seed = _account_seed_with_band(service, selected, "LOW")
     result = _run_initial(
-        InvestigationRunnerV2(_config(tmp_path), executor=FakeExecutor(_aligned_low_output())),
+        InvestigationRunnerV2(_config(tmp_path), executor=FakeExecutor(output)),
         service,
         seed,
         tmp_path,
-        "inv_low_aligned",
+        "inv_prose_not_rejected",
     )
 
     assert result.succeeded
     assert result.validation_status == "PASSED"
     assert result.failure_code is None
+    assert result.response is not None
+    assert result.response.summary == output.summary
+    assert not hasattr(runner_module, "validate_band_alignment")
+    assert "BAND_ALIGNMENT_FAILED" not in Path(runner_module.__file__).read_text()
 
 
-def test_misaligned_low_output_is_blocked_before_display_for_initial_and_follow_up(
-    ai_service, tmp_path
-) -> None:
+def test_account_and_transaction_runs_share_the_structured_summary_schema(ai_service, tmp_path) -> None:
     service, selected, _ = ai_service
-    seed = _account_seed_with_band(service, selected, "LOW")
-    runner = InvestigationRunnerV2(
-        _config(tmp_path), executor=FakeExecutor(_misaligned_low_output())
+    transaction_seed = resolve_seed_context(
+        service,
+        ReviewState(),
+        subject_type=SubjectType.TRANSACTION,
+        subject_ref=selected.ref,
+    )
+    account_ref = service.get_transaction_detail(selected.ref).transaction_facts.sender.account_ref
+    account_seed = resolve_seed_context(
+        service,
+        ReviewState(),
+        subject_type=SubjectType.ACCOUNT,
+        subject_ref=account_ref,
+    )
+    output = _success_output()
+    runner = InvestigationRunnerV2(_config(tmp_path), executor=FakeExecutor(output))
+
+    transaction_result = _run_initial(
+        runner, service, transaction_seed, tmp_path, "inv_transaction_schema"
+    )
+    account_result = _run_initial(
+        runner, service, account_seed, tmp_path, "inv_account_schema"
     )
 
-    initial = _run_initial(runner, service, seed, tmp_path, "inv_low_blocked")
-    follow_up = asyncio.run(
-        runner.run_follow_up(
-            investigation_id="inv_low_follow_up_blocked",
-            parent_investigation_id="inv_low_parent",
-            question="Could this result be wrong?",
-            seed=seed,
-            service=service,
-            runtime_state_path=tmp_path / "state.json",
-            origin_alert_ref=None,
-            origin_transaction_ref=None,
-        )
-    )
-
-    for result in (initial, follow_up):
-        assert result.response is None
-        assert result.validation_status == "FAILED"
-        assert result.failure_code == "BAND_ALIGNMENT_FAILED"
+    for result in (transaction_result, account_result):
+        assert result.succeeded
+        assert isinstance(result.structured_output, InvestigationSummaryV2)
+        assert result.structured_output.model_dump() == output.model_dump()
+        assert result.response is not None
+        assert result.response.summary == output.summary
+        assert list(result.response.observations) == output.observations
+        assert list(result.response.patterns) == output.patterns
+        assert list(result.response.limits) == output.limits
 
 
 def test_provider_failure_remains_a_normal_failure_surface(ai_service, tmp_path) -> None:

@@ -1,5 +1,7 @@
 import type { AccountListItem, AlertListItem, ReviewWorkflowStatus, SupportingTransactionRow, TransactionListItem } from "../api/types";
-import { AccountIdentityText, BankCountry, BooleanIndicator, NetworkReviewBand, ReviewPriority, ReviewWorkflowStatus as WorkflowStatus, TableScroll, formatMoney, formatUtc, rowKeyboardHandler } from "./ui";
+import { buildAccountDetailHref } from "../api/query";
+import { AccountLink, TransactionLink } from "./links";
+import { BankCountry, BooleanIndicator, NetworkReviewBand, ReviewPriority, ReviewWorkflowStatus as WorkflowStatus, TableScroll, formatMoney, formatUtc, rowKeyboardHandler } from "./ui";
 
 export function AlertsTable({ items, onOpen, onStatusChange, savingAlert, statusErrors = {} }: { items: AlertListItem[]; onOpen: (item: AlertListItem) => void; onStatusChange: (item: AlertListItem, status: ReviewWorkflowStatus) => void; savingAlert?: string | null; statusErrors?: Record<string, string | null> }) {
   return (
@@ -9,7 +11,7 @@ export function AlertsTable({ items, onOpen, onStatusChange, savingAlert, status
         <tbody>{items.map((item) => (
           <tr key={item.alert_ref} tabIndex={0} onClick={() => onOpen(item)} onKeyDown={rowKeyboardHandler(() => onOpen(item))} aria-label={`Open alert ${item.alert_ref}`}>
             <td><code>{item.alert_ref}</code></td>
-            <td><AccountIdentityText value={item} /></td>
+            <td><AccountLink value={item} to={buildAccountDetailHref(item.account_ref, { origin_alert_ref: item.alert_ref })} /></td>
             <td><BankCountry value={item.bank_country} compact /></td>
             <td><NetworkReviewBand value={item.network_review_band} /></td>
             <td><span className="reason-text">{humanizeReason(item.primary_reason)}</span></td>
@@ -30,10 +32,10 @@ export function TransactionsTable({ items, onOpen, focusedRefs = new Set<string>
         <thead><tr><th>Transaction Ref</th><th>Time</th><th>Sender / Bank Country</th><th>Receiver / Bank Country</th><th>Amount Paid</th><th>Amount Received</th><th>Format</th><th>AML Review Priority</th><th>Alert</th></tr></thead>
         <tbody>{items.map((item) => (
           <tr key={item.transaction_ref} tabIndex={0} className={focusedRefs.has(item.transaction_ref) ? "evidence-row-focused" : ""} onClick={() => onOpen(item)} onKeyDown={rowKeyboardHandler(() => onOpen(item))}>
-            <td><code className="code-short">{item.transaction_ref}</code></td>
+            <td><TransactionLink transactionRef={item.transaction_ref} /></td>
             <td><code>{formatUtc(item.timestamp)}</code></td>
-            <td><div className="identity-stack"><AccountIdentityText value={item.sender} /><BankCountry value={item.sender.bank_country} compact /></div></td>
-            <td><div className="identity-stack"><AccountIdentityText value={item.receiver} /><BankCountry value={item.receiver.bank_country} compact /></div></td>
+            <td><div className="identity-stack"><AccountLink value={item.sender} to={buildAccountDetailHref(item.sender.account_ref, { origin_transaction_ref: item.transaction_ref })} /><BankCountry value={item.sender.bank_country} compact /></div></td>
+            <td><div className="identity-stack"><AccountLink value={item.receiver} to={buildAccountDetailHref(item.receiver.account_ref, { origin_transaction_ref: item.transaction_ref })} /><BankCountry value={item.receiver.bank_country} compact /></div></td>
             <td className="money">{formatMoney(item.amount_paid, item.payment_currency)}</td>
             <td className="money">{formatMoney(item.amount_received, item.receiving_currency)}</td>
             <td>{item.payment_format}</td>
@@ -53,7 +55,7 @@ export function AccountsTable({ items, onOpen }: { items: AccountListItem[]; onO
         <thead><tr><th>Bank + Account</th><th>Bank Country</th><th>Network Review Band</th><th>Detector Cutoff</th><th>Incoming</th><th>Outgoing</th><th>Alert</th></tr></thead>
         <tbody>{items.map((item) => (
           <tr key={item.account_ref} tabIndex={0} onClick={() => onOpen(item)} onKeyDown={rowKeyboardHandler(() => onOpen(item))}>
-            <td><div className="identity-stack"><AccountIdentityText value={item} /><code className="code-short">{item.account_ref}</code></div></td>
+            <td><AccountLink value={item} to={buildAccountDetailHref(item.account_ref)} showAccountRef /></td>
             <td><BankCountry value={item.bank_country} /></td>
             <td><NetworkReviewBand value={item.network_review_band} /></td>
             <td><code>{formatUtc(item.latest_detector_cutoff)}</code></td>

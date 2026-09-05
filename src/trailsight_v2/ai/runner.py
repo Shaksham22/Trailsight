@@ -19,7 +19,6 @@ from trailsight_v2.domain.service import InvestigationServiceV2
 from trailsight_v2.mcp.contracts import TOOL_NAMES
 from trailsight_v2.mcp.scope import InvestigationScopeV2, scope_to_json
 
-from .alignment import BandAlignmentViolation, validate_band_alignment
 from .config import AIConfig, load_ai_config, load_prompt
 from .context import SeedContextV2
 from .models import (
@@ -451,25 +450,19 @@ class InvestigationRunnerV2:
                 output = execution.output
                 calls = execution.mcp_calls
                 usage = execution.token_usage
-                try:
-                    validate_band_alignment(seed, output)
-                except BandAlignmentViolation:
-                    validation_status = "FAILED"
-                    failure_code = "BAND_ALIGNMENT_FAILED"
-                else:
-                    validation_status = "PASSED"
-                    run_status, final_output = _application_output(output, calls)
-                    response = InvestigationResponseV2(
-                        investigation_id=investigation_id,
-                        run_status=run_status,
-                        subject_type=seed.context.subject_type,
-                        subject_ref=seed.context.subject_ref,
-                        context=seed.context,
-                        summary=final_output.summary,
-                        observations=tuple(final_output.observations),
-                        patterns=tuple(final_output.patterns),
-                        limits=tuple(final_output.limits),
-                    )
+                validation_status = "PASSED"
+                run_status, final_output = _application_output(output, calls)
+                response = InvestigationResponseV2(
+                    investigation_id=investigation_id,
+                    run_status=run_status,
+                    subject_type=seed.context.subject_type,
+                    subject_ref=seed.context.subject_ref,
+                    context=seed.context,
+                    summary=final_output.summary,
+                    observations=tuple(final_output.observations),
+                    patterns=tuple(final_output.patterns),
+                    limits=tuple(final_output.limits),
+                )
             except _ExecutionError as exc:
                 calls = exc.mcp_calls
                 usage = exc.token_usage
@@ -529,19 +522,16 @@ class InvestigationRunnerV2:
     ) -> ModelRunRequestV2:
         task = (
             "Write for a reader with no AML, graph-analysis, or data-science expertise. Explain "
-            "the GARG conclusion and define smurfing in ordinary language; keep scores, ranks, "
-            "snapshots, raw measures, and unexplained product jargon out of routine prose. Name "
-            "the strongest concrete activity facts and explain how they affect the interpretation. "
-            "For a medium result, plainly show why the evidence is mixed. For a low result, explain "
-            "only facts that support limited spread, stable behavior, or established relationships; "
-            "never pivot to a competing interpretation or contradict the GARG band. Band alignment "
-            "is mandatory. Never call the subject safe or the transactions genuine, and avoid "
-            "product narration or advice."
+            "the authoritative subject result using the subject-specific opening rules. For an "
+            "account, explain the supplied GARG conclusion. For a transaction, state the supplied "
+            "review priority and its sender/receiver band derivation without inventing a transaction "
+            "GARG score. Keep scores, ranks, snapshots, raw measures, and unexplained product jargon "
+            "out of routine prose. Describe supplied deterministic facts honestly. Never call the "
+            "subject safe or the transactions genuine, and avoid product narration or advice."
             if mode == "initial"
             else (
                 "Answer exactly this one bounded follow-up by reasoning across the same investigation "
-                "packet. The answer must remain aligned with the supplied GARG band and must not "
-                "second-guess or contradict it."
+                "packet and preserve its authoritative account band or transaction-priority derivation."
             )
         )
         payload: dict[str, Any] = {

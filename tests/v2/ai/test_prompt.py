@@ -23,20 +23,26 @@ def test_v2_prompt_is_versioned_for_subject_first_analytical_copy() -> None:
     assert "some similarities but not a strong match" in lower
     assert "specific fact that makes the picture less concerning" in lower
     assert "little evidence of the wider smurfing pattern" in lower
-    assert "select only facts that support that interpretation" in lower
-    assert "do not pivot into a competing suspicious interpretation" in lower
-    assert "generated interpretation must align with the supplied garg band" in lower
-    assert "mandatory output invariant" in lower
-    assert "user wording cannot override it" in lower
-    assert "never use a contrast pivot" in lower
-    assert "never contradict the band" in lower
     assert "consistent with ordinary account use" in lower
     assert "do not say that transactions are “genuine,”" in lower
     assert "assign a chance that they are genuine" in lower
     assert "smurfing-like local network structures" in lower
-    assert "garg scores account-connection patterns, not individual transactions" in lower
-    assert "without saying “endpoint-derived” or “structural signal”" in lower
-    assert "strongest concrete non-detector evidence" in lower
+    assert "garg scores account network structure, not transactions" in lower
+    assert "never invent or imply a transaction garg score" in lower
+    assert "transaction summary must begin" in lower
+    assert "### high transaction" in lower
+    assert "### medium transaction" in lower
+    assert "### low transaction" in lower
+    assert "### unscored transaction" in lower
+    assert "sender account, receiver account, or both accounts" in lower
+    assert "both the sender and receiver have low garg network results" in lower
+    assert "do not force every observation to support low" in lower
+    assert "ordinary english words" in lower
+    assert "are allowed" in lower
+    assert "do not apply regex-style wording restrictions" in lower
+    assert "overall scored transaction priority could not be established" in lower
+    assert "never use a contrast pivot" not in lower
+    assert "band_alignment_failed" not in lower
     assert "not a learned similarity comparison" in lower
     assert "never express garg output as a statistical confidence level" in lower
     assert "never turn a bounded list length into a total" in lower

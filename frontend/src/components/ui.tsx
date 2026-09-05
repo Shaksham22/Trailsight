@@ -1,6 +1,7 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import type { AccountIdentity, ReviewBand, ReviewWorkflowStatus } from "../api/types";
+import { formatUtc, formatUtcDate } from "../lib/format";
 import { APP_ROUTES } from "../lib/routes";
 import { REVIEW_STATUSES, allowedReviewStatuses, reviewBandLabel, workflowLabel } from "../lib/workflow";
 import { useTheme } from "../theme/ThemeProvider";
@@ -193,6 +194,7 @@ export function TableScroll({ children }: { children: ReactNode }) {
 
 export function rowKeyboardHandler(open: () => void) {
   return (event: KeyboardEvent<HTMLTableRowElement>) => {
+    if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       open();
@@ -200,10 +202,7 @@ export function rowKeyboardHandler(open: () => void) {
   };
 }
 
-export function formatUtc(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : `${date.toISOString().replace("T", " ").replace(".000Z", "Z")}`;
-}
+export { formatUtc, formatUtcDate };
 
 export function formatMoney(value: string, currency: string) {
   const amount = Number(value);

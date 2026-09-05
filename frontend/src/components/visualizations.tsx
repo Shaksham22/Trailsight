@@ -39,9 +39,20 @@ function useChart(option: EChartsCoreOption, registerWorld = false) {
     if (!element) return;
     if (registerWorld) ensureWorldMap();
     const chart = echarts.init(element, undefined, { renderer: "canvas" });
-    const observer = new ResizeObserver(() => chart.resize());
+    let resizeFrame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        if (!chart.isDisposed()) chart.resize();
+      });
+    });
     observer.observe(element);
-    return () => { observer.disconnect(); chart.dispose(); };
+    return () => {
+      observer.disconnect();
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      chart.dispose();
+    };
   }, [registerWorld]);
   useEffect(() => {
     const chart = ref.current ? echarts.getInstanceByDom(ref.current) : undefined;
@@ -84,6 +95,10 @@ export function BankCountryRouteMap({ route }: { route: BankCountryRoute }) {
 export function AccountBankCountryConnectionsMap({ rootBankCountry, flows }: { rootBankCountry: string; flows: BankCountryFlowRow[] }) {
   const { chartTheme } = useTheme();
   const model = useMemo(() => buildAccountBankCountryVisualModel(rootBankCountry, flows), [rootBankCountry, flows]);
+  const compactSummary = useMemo(() => {
+    const connected = [...new Set(model.connections.map((connection) => connection.bankCountry))].sort();
+    return `Root: ${rootBankCountry} · Connected: ${connected.length > 0 ? connected.join(", ") : "None"}`;
+  }, [model.connections, rootBankCountry]);
   const option = useMemo<EChartsCoreOption>(() => {
     const rootSameCountryFlow = model.connections.find((connection) => connection.sameCountry);
     const rootTooltip = model.root
@@ -139,9 +154,9 @@ export function AccountBankCountryConnectionsMap({ rootBankCountry, flows }: { r
         map: "trailsight-world",
         roam: true,
         scaleLimit: { min: 1, max: 6 },
-        zoom: 1.08,
+        zoom: 1,
         layoutCenter: ["50%", "50%"],
-        layoutSize: "108%",
+        layoutSize: "96%",
         silent: false,
         itemStyle: { areaColor: chartTheme.mapLand, borderColor: chartTheme.mapBorder, borderWidth: 0.7 },
         emphasis: { itemStyle: { areaColor: chartTheme.mapHover }, label: { show: false } },
@@ -200,7 +215,7 @@ export function AccountBankCountryConnectionsMap({ rootBankCountry, flows }: { r
   }, [chartTheme, model, rootBankCountry]);
   const ref = useChart(option, true);
   return <div className="visual-block account-country-map">
-    <div className="route-summary"><strong>Account Bank-Country Connections</strong><span>{model.summary}</span></div>
+    <p className="account-country-map__summary">{compactSummary}</p>
     <div ref={ref} className="chart chart--map chart--account-country-map" role="img" aria-label={`Interactive Account Bank-Country connections map. ${model.summary}. Zoom and pan are available.`} />
     <div className="graph-legend account-country-legend" aria-label="Account Bank-Country connection legend">
       <span><i className="legend-country legend-country--root" />{ACCOUNT_BANK_COUNTRY_SEMANTICS.root.legendLabel}</span>
@@ -208,8 +223,7 @@ export function AccountBankCountryConnectionsMap({ rootBankCountry, flows }: { r
       <span><i className="legend-line legend-line--outgoing" />{ACCOUNT_BANK_COUNTRY_SEMANTICS.outgoing.legendLabel}</span>
       <span><i className="legend-line legend-line--incoming" />{ACCOUNT_BANK_COUNTRY_SEMANTICS.incoming.legendLabel}</span>
     </div>
-    <p className="visual-helper account-country-map__interaction-hint">Interaction: scroll or pinch to zoom, drag to pan, and hover a highlighted country or flow for deterministic details.</p>
-    <p className="visual-helper">{model.summary}</p>
+    <p className="visual-helper account-country-map__interaction-hint">Scroll/pinch to zoom · Drag to pan · Hover for details</p>
     {(!model.root || model.unmappedCountries.length > 0) && <p className="visual-helper">Map marker coordinates are unavailable for {model.root ? model.unmappedCountries.join(", ") : rootBankCountry}; deterministic flow rows remain available in the table below. No safety conclusion is implied.</p>}
     {!!model.polygonUnavailableCountries.length && <p className="visual-helper">Polygon geometry is unavailable for {model.polygonUnavailableCountries.join(", ")}; authoritative centroid markers and flow lines remain visible.</p>}
     <p className="visual-helper">Bank countries are deterministic synthetic metadata added by Trailsight. They are not customer locations.</p>
@@ -220,6 +234,7 @@ export function AccountRelationshipGraph({ network }: { network: AccountNetwork 
   const { chartTheme } = useTheme();
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const option = useMemo<EChartsCoreOption>(() => {
+    const graphInset = network.counterparties.length <= 1 ? "28%" : network.counterparties.length <= 4 ? "16%" : network.counterparties.length <= 8 ? "10%" : "6%";
     const nodes = [
       { id: network.root.account_ref, name: `${network.root.bank_id}\n${shortAccount(network.root.account_id)}`, symbolSize: 56, itemStyle: { color: chartTheme.networkRootFill, borderColor: chartTheme.networkRootBorder, borderWidth: 3 }, label: { show: true, color: chartTheme.networkRootLabel, fontSize: 11 }, bankCountry: network.root.bank_country },
       ...network.counterparties.map((node) => ({ id: node.account_ref, name: `${node.bank_id}\n${shortAccount(node.account_id)}`, symbolSize: selectedNode === node.account_ref ? 38 : 33, itemStyle: { color: selectedNode === node.account_ref ? chartTheme.networkCounterpartySelectedFill : chartTheme.networkCounterpartyFill, borderColor: selectedNode === node.account_ref ? chartTheme.networkCounterpartySelectedBorder : chartTheme.networkCounterpartyBorder, borderWidth: selectedNode === node.account_ref ? 2 : 1 }, label: { show: true, color: chartTheme.networkCounterpartyLabel, fontSize: 10 }, bankCountry: node.bank_country })),
@@ -229,7 +244,7 @@ export function AccountRelationshipGraph({ network }: { network: AccountNetwork 
       if (relationship.outgoing_count > 0) links.push({ source: network.root.account_ref, target: relationship.counterparty_account_ref, count: relationship.outgoing_count, direction: "Outgoing", selected: relationship.selected_relationship, lineStyle: { width: relationship.selected_relationship ? 3 : 1.2, color: relationship.selected_relationship ? chartTheme.networkEdgeSelected : chartTheme.networkEdgeOutgoing, curveness: relationship.incoming_count ? 0.13 : 0.05 } });
       if (relationship.incoming_count > 0) links.push({ source: relationship.counterparty_account_ref, target: network.root.account_ref, count: relationship.incoming_count, direction: "Incoming", selected: relationship.selected_relationship, lineStyle: { width: relationship.selected_relationship ? 3 : 1.2, color: relationship.selected_relationship ? chartTheme.networkEdgeSelected : chartTheme.networkEdgeIncoming, curveness: relationship.outgoing_count ? -0.13 : -0.05 } });
     }
-    return { animation: false, backgroundColor: chartTheme.chartCanvas, tooltip: { backgroundColor: chartTheme.chartTooltipBackground, borderColor: chartTheme.chartTooltipBorder, textStyle: { color: chartTheme.chartTooltipText }, formatter: (params: { dataType?: string; data?: { name?: string; bankCountry?: string; direction?: string; count?: number; selected?: boolean } }) => params.dataType === "edge" ? `${params.data?.direction}: ${params.data?.count} transaction(s)${params.data?.selected ? "<br/>Selected transaction relationship" : ""}` : `${params.data?.name?.replace("\n", " / ")}<br/>Bank Country: ${params.data?.bankCountry ?? "—"}` }, series: [{ type: "graph", layout: "circular", circular: { rotateLabel: false }, roam: false, data: nodes, links, edgeSymbol: ["none", "arrow"], edgeSymbolSize: [0, 8], lineStyle: { opacity: 0.78 }, emphasis: { focus: "adjacency" } }] };
+    return { animation: false, backgroundColor: chartTheme.chartCanvas, tooltip: { backgroundColor: chartTheme.chartTooltipBackground, borderColor: chartTheme.chartTooltipBorder, textStyle: { color: chartTheme.chartTooltipText }, formatter: (params: { dataType?: string; data?: { name?: string; bankCountry?: string; direction?: string; count?: number; selected?: boolean } }) => params.dataType === "edge" ? `${params.data?.direction}: ${params.data?.count} transaction(s)${params.data?.selected ? "<br/>Selected relationship" : ""}` : `${params.data?.name?.replace("\n", " / ")}<br/>Bank Country: ${params.data?.bankCountry ?? "—"}` }, series: [{ type: "graph", layout: "circular", circular: { rotateLabel: false }, roam: false, left: graphInset, right: graphInset, top: graphInset, bottom: graphInset, data: nodes, links, edgeSymbol: ["none", "arrow"], edgeSymbolSize: [0, 8], lineStyle: { opacity: 0.78 }, emphasis: { focus: "adjacency" } }] };
   }, [chartTheme, network, selectedNode]);
   const ref = useChart(option);
   useEffect(() => {
@@ -247,7 +262,7 @@ export function AccountRelationshipGraph({ network }: { network: AccountNetwork 
     return () => { if (!chart.isDisposed()) chart.off("click", handler); };
   }, [network.root.account_ref, ref, selectedNode]);
   const truncation = graphTruncationText(network);
-  return <div className="visual-block"><div ref={ref} className="chart chart--graph" role="img" aria-label={`One-hop account relationship graph. Root account ${network.root.bank_id} ${network.root.account_id}. ${network.shown_counterparties} direct counterparties shown.`} /><div className="graph-legend"><span><i className="legend-line legend-line--selected" />Selected transaction</span><span>Arrows show transaction direction</span><span>One hop only · no expansion</span></div>{truncation && <p className="visual-helper">{truncation}</p>}</div>;
+  return <div className="visual-block"><div ref={ref} className="chart chart--graph" role="img" aria-label={`One-hop account relationship graph. Root account ${network.root.bank_id} ${network.root.account_id}. ${network.shown_counterparties} direct counterparties shown.`} /><div className="graph-legend">{network.relationships.some((relationship) => relationship.selected_relationship) && <span><i className="legend-line legend-line--selected" />Selected relationship</span>}<span>Arrows show transaction direction</span><span>One hop only · no expansion</span></div>{truncation && <p className="visual-helper">{truncation}</p>}</div>;
 }
 
 export function ActivityTimeline({ activity }: { activity: ActivityContext }) {

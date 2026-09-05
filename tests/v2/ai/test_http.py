@@ -160,3 +160,4 @@ def test_http_module_does_not_construct_domain_or_runtime_state_services() -> No
     assert "create_investigation_service_v2" not in source
     assert "RuntimeStateStore(" not in source
     assert "runtime_state.json" not in source
+    assert "BAND_ALIGNMENT_FAILED" not in source

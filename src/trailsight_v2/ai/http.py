@@ -159,7 +159,6 @@ def _run_error(failure_code: str | None) -> JSONResponse:
     code = failure_code or "AI_UNAVAILABLE"
     messages = {
         "STRUCTURED_OUTPUT_INVALID": "The model response did not satisfy the investigation contract",
-        "BAND_ALIGNMENT_FAILED": "The model response did not align with the authoritative GARG result",
         "TOOL_ERROR": "The bounded investigation tools were unavailable",
         "MODEL_TIMEOUT": "The AI investigation timed out",
         "MODEL_ERROR": "The AI model request was unavailable",

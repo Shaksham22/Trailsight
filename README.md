@@ -24,6 +24,70 @@ IBM's `Is Laundering` label and hidden pattern annotations are offline-evaluatio
 
 Bank Country is deterministic synthetic **bank metadata**. It is not customer residence, nationality, physical location, domicile, or country risk.
 
+## Product screenshots
+
+### Analyst workspaces
+
+**Network Pattern Alerts.** Review-prioritized accounts are presented with their Bank Country metadata, detector cutoff, entry reason, and human workflow status.
+
+![Trailsight Network Pattern Alerts queue](docs/assets/alerts-queue.png)
+
+**Transaction browser.** Server-driven search and filters provide a bounded view of transaction facts, endpoint identities, currencies, formats, and review priorities.
+
+![Trailsight transaction browser](docs/assets/transactions-browser.png)
+
+**Account directory.** Canonical Bank and Account identities appear alongside the latest completed network-review context and directional activity counts.
+
+![Trailsight account directory](docs/assets/accounts-directory.png)
+
+### Account investigation
+
+**Account overview.** The primary investigation view brings together identity, detector standing, directional transaction activity, counterparties, and same-currency comparisons.
+
+![Trailsight Account Investigation overview](docs/assets/account-investigation-overview.png)
+
+**Bounded AI assessment.** The optional structured assessment summarizes supplied facts, observations, patterns, and material limits while preserving a single bounded follow-up.
+
+![Trailsight Account Investigation AI assessment](docs/assets/account-ai-assessment.png)
+
+**Network and Bank-Country flows.** A world-context flow map and bounded one-hop account graph show international bank metadata and transaction direction side by side.
+
+![Trailsight Account Investigation network and Bank-Country flows](docs/assets/account-network-and-bank-country-flows.png)
+
+**Flow and relationship detail.** Bank-Country aggregates, per-currency activity, and direct counterparty counts retain their separate deterministic measures.
+
+![Trailsight Account Investigation flow summary and direct counterparties](docs/assets/account-flow-summary-and-counterparties.png)
+
+**Historical investigation context.** Alert history and bounded transaction records connect the account’s review state to the underlying activity.
+
+![Trailsight Account Investigation alert history and transactions](docs/assets/account-alert-history-and-transactions.png)
+
+### Transaction investigation
+
+**Transaction overview.** Review priority and its endpoint-band derivation sit above the transfer summary and synthetic Bank-Country route.
+
+![Trailsight Transaction Investigation overview](docs/assets/transaction-investigation-overview.png)
+
+**Structured transaction assessment.** The shared AI investigation surface describes the transaction, key observations, cross-fact patterns, and meaningful limits.
+
+![Trailsight Transaction Investigation AI assessment](docs/assets/transaction-ai-assessment.png)
+
+**Facts and endpoint context.** Exact transfer facts are followed by sender and receiver account state at the applicable historical cutoff.
+
+![Trailsight Transaction Investigation facts and endpoint accounts](docs/assets/transaction-facts-and-endpoints.png)
+
+**Deterministic indicators.** Endpoint bands, amount-history comparisons, relationship history, recent velocity, and currency-route facts remain directly inspectable.
+
+![Trailsight Transaction Investigation endpoint accounts and deterministic indicators](docs/assets/transaction-endpoints-and-indicators.png)
+
+**Activity and local network.** A sender-rooted 30-day activity view and bounded one-hop graph provide temporal and relationship context without cross-currency aggregation.
+
+![Trailsight Transaction Investigation activity and local network](docs/assets/transaction-activity-and-network.png)
+
+**Supporting evidence.** Evidence categories and their bounded supporting transaction rows remain visible beneath the investigation narrative.
+
+![Trailsight Transaction Investigation supporting evidence](docs/assets/transaction-supporting-evidence.png)
+
 ## Prerequisites
 
 - Python 3.12 or newer

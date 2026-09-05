@@ -163,7 +163,11 @@ const activityBuckets = [
 ];
 
 function network(root: AccountIdentity, selectedCounterparty: AccountIdentity) {
-  const cps = [selectedCounterparty, ACCOUNTS.sameCountry, ACCOUNTS.other, ACCOUNTS.sg].filter((a) => a.account_ref !== root.account_ref);
+  const cps = [...new Map(
+    [selectedCounterparty, ACCOUNTS.sameCountry, ACCOUNTS.other, ACCOUNTS.sg]
+      .filter((account) => account.account_ref !== root.account_ref)
+      .map((account) => [account.account_ref, account]),
+  ).values()];
   return {
     root,
     counterparties: cps.map((cp) => ({ ...cp, is_root: false })),

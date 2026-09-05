@@ -72,12 +72,12 @@ export function AIInvestigation(props: AIInvestigationProps) {
 
   return (
     <div className="ai-panel">
-      {status === "IDLE" && <button className="button" onClick={investigate}>Investigate with AI</button>}
-      {(status === "SUCCESS" || status === "PARTIAL") && <button className="button button--secondary" onClick={investigate}>Run again</button>}
+      {status === "IDLE" && <div className="ai-idle"><div><strong>Generate an assessment</strong><p>Create a concise synthesis of the resolved facts and patterns.</p></div><button className="button" onClick={investigate}>Investigate with AI</button></div>}
+      {(status === "SUCCESS" || status === "PARTIAL") && <div className="ai-rerun"><button className="button button--secondary" onClick={investigate}>Run again</button></div>}
 
       {status === "LOADING" && <LoadingState label="AI investigation is analyzing the bounded packet…" />}
       {status === "UNAVAILABLE" && <UnavailableState title="AI investigation unavailable" detail="AI investigation is unavailable. Deterministic investigation evidence remains available." />}
-      {status === "ERROR" && <UnavailableState title="AI investigation error" detail="AI investigation is unavailable. Deterministic investigation evidence remains available." />}
+      {status === "ERROR" && <><UnavailableState title="AI investigation error" detail="AI investigation is unavailable. Deterministic investigation evidence remains available." /><button className="button button--secondary" onClick={investigate}>Try again</button></>}
       {error && <InlineError message={error} />}
 
       {response && (status === "SUCCESS" || status === "PARTIAL") && (

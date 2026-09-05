@@ -305,7 +305,9 @@ test("AI start uses structured backend response, follow-up uses one endpoint, an
 
 test("deterministic detail remains outside the AI failure surface and transaction AI sends no forbidden origin", async () => {
   const txPage = await source("src/pages/TransactionDetailPage.tsx");
-  assert.ok(txPage.indexOf('title="1. AML Review Priority"') < txPage.indexOf('title="8. AI Investigation"'));
+  assert.ok(txPage.indexOf('title="AML Review Priority"') < txPage.indexOf('title="AI Assessment"'));
+  assert.ok(txPage.indexOf('title="AI Assessment"') < txPage.indexOf('title="Transaction Summary + Bank-Country Route"'));
+  assert.doesNotMatch(txPage, /title="\d+\./);
   assert.match(txPage, /subject_type="TRANSACTION"[^>]+origin_alert_ref=\{null\} origin_transaction_ref=\{null\}/);
   const ai = await source("src/components/AIInvestigation.tsx");
   assert.match(ai, /AI investigation is unavailable\. Deterministic investigation evidence remains available\./);
