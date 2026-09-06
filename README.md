@@ -1,10 +1,16 @@
 # Trailsight
 
-Trailsight is an AI-native AML investigation-support system. It helps analysts investigate unusual account and transaction activity using deterministic evidence, network analysis, and optional AI assistance. It prioritizes accounts and transactions for review and keeps the underlying investigation facts visible. It explains their place in the review queue and keeps the underlying facts visible.
+Trailsight is an **AI-native AML investigation system** for exploring unusual account and transaction activity.
 
-The app uses synthetic AML transaction data from IBM, not real customer data. It can also use an optional large language model (LLM) investigation layer. The optional AI assessment receives bounded investigation context calculated by Trailsight and returns a structured summary, observations, and patterns.
+It combines **IBM AMLworld synthetic transaction data**, **GARG-AML graph analysis**, historical detector snapshots, deterministic investigation evidence, bounded **MCP tools**, and a structured **LLM investigation layer** inside a React investigation workspace.
 
-Trailsight does **not** decide that money laundering happened. It does not calculate the probability that someone committed a crime. It does not block a payment or tell an analyst to file a report. A person must review the information and make the final judgment.
+Analysts can move from a review queue into detailed Account and Transaction investigations, inspect counterparties, transaction flows, Bank-Country activity, local account networks, historical context, supporting evidence, and AI-generated summaries grounded in the investigation data.
+
+At the detection layer, Trailsight uses GARG-AML to analyze local account-network structure and rank accounts for review. Those historical results are prepared ahead of time and reused consistently when an investigation is opened.
+
+At the investigation layer, deterministic application code resolves the relevant facts and Evidence V2 records. The optional AI receives a bounded investigation context through predefined MCP tools and returns a structured assessment with a summary, key observations, and patterns found across the supplied data.
+
+The result is a reproducible AML investigation workflow that connects network-based detection, deterministic evidence, APIs, AI tooling, and an interactive analyst workspace.
 
 ## Data and research credits
 
