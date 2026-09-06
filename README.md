@@ -1,24 +1,24 @@
 # Trailsight
 
-Trailsight is a local investigation app. It helps an analyst explore unusual patterns in financial transactions. It organizes accounts and transactions that may deserve a closer look. It explains their place in the review queue and keeps the underlying facts visible.
+Trailsight is an AI-native AML investigation-support system. It helps analysts investigate unusual account and transaction activity using deterministic evidence, network analysis, and optional AI assistance. It prioritizes accounts and transactions for review and keeps the underlying investigation facts visible. It explains their place in the review queue and keeps the underlying facts visible.
 
-The app uses artificial transaction data from IBM, not real customer data. It can also use artificial intelligence (AI). The AI writes an optional summary based only on facts supplied by the app.
+The app uses synthetic AML transaction data from IBM, not real customer data. It can also use an optional large language model (LLM) investigation layer. The optional AI assessment receives bounded investigation context calculated by Trailsight and returns a structured summary, observations, and patterns.
 
 Trailsight does **not** decide that money laundering happened. It does not calculate the probability that someone committed a crime. It does not block a payment or tell an analyst to file a report. A person must review the information and make the final judgment.
 
 ## Data and research credits
 
-Trailsight builds on work created by IBM and the GARG-AML researchers. These sources deserve direct credit.
+Trailsight builds on work created by IBM and the GARG-AML researchers. 
 
 **AML** means anti-money laundering: the work of finding and investigating activity that may involve attempts to hide the illegal source of money.
 
-### IBM: artificial transaction data
+### IBM AMLworld: synthetic AML transaction data
 
-The transaction data comes from IBM's [AML-Data project](https://github.com/IBM/AML-Data), commonly called AMLworld. IBM generated the data inside a computer-made world of banks, people, and companies. The records are artificial. They are not real transactions with names removed.
+The transaction data comes from IBM's [AML-Data project](https://github.com/IBM/AML-Data), commonly called AMLworld. IBM generated the dataset in a synthetic financial environment containing banks, people, companies, and transactions. 
 
-Trailsight uses the **HI-Small** file from that project. HI-Small is IBM's name for this particular artificial transaction file. IBM includes hidden labels that act like an answer key for testing.
+Trailsight uses the **HI-Small** file from that project. HI-Small is IBM's name for this particular artificial transaction file. IBM includes benchmark ground-truth labels — effectively an answer key used only for offline evaluation for testing.
 
-Trailsight keeps that answer key out of the running app. This means the pattern-finding calculation cannot use IBM's answers while producing its own results. The raw IBM file is not included in this repository. IBM publishes the data under the [CDLA-Sharing-1.0 license](https://spdx.org/licenses/CDLA-Sharing-1.0.html).
+Trailsight keeps that answer key out of the running app. This means the GARG-AML detector cannot use IBM's answers while producing its own results. The raw IBM file is not included in this repository. IBM publishes the data under the [CDLA-Sharing-1.0 license](https://spdx.org/licenses/CDLA-Sharing-1.0.html).
 
 ### GARG-AML: account-pattern research
 
@@ -26,13 +26,13 @@ Trailsight keeps that answer key out of the running app. This means the pattern-
 
 GARG-AML was created by Bruno Deprez, Bart Baesens, Tim Verdonck, and Wouter Verbeke. Credit goes to their [GARG-AML research paper](https://arxiv.org/abs/2506.04292) and [public source code](https://github.com/B-Deprez/GARG-AML).
 
-In simple terms, GARG-AML turns transfers into a map. Accounts are points, and transactions connect those points. It looks at an account, the accounts directly connected to it, and the next layer of connections.
+In simple terms, GARG-AML models transaction activity as a graph: accounts are nodes and transaction relationships form edges. Accounts are points, and transactions connect those points. It looks at an account, the accounts directly connected to it, and the next layer of connections.
 
-GARG-AML then measures whether that small part of the map resembles **smurfing**. Smurfing is a pattern in which money is moved through several accounts, often in smaller transfers, to make the trail harder to follow.
+GARG-AML then measures whether that local account-network structure resembles **smurfing**. Smurfing is a pattern in which money is moved through several accounts, often in smaller transfers, to make the trail harder to follow.
 
-Trailsight uses the basic, undirected version of the GARG-AML calculation. Here, “undirected” means it studies whether accounts are connected without using the sending direction as a separate part of the score.
+Trailsight uses the basic undirected GARG graph formulation of the GARG-AML calculation. Here, “undirected” means it studies whether accounts are connected without using the sending direction as a separate part of the score.
 
-Trailsight ranks accounts that have enough connection data. It then places them into HIGH, MEDIUM, or LOW **review bands**, which help order an analyst's work. These bands are Trailsight's own review rules. They are not official rules from the GARG-AML authors, proof of money laundering, or probabilities.
+Trailsight ranks accounts that have enough connection data. It then places them into HIGH, MEDIUM, or LOW **review-prioritization policy**, which help order an analyst's work. These bands are Trailsight's own review rules. They are not official rules from the GARG-AML authors, proof of money laundering, or probabilities.
 
 Trailsight is the app in this repository that brings these pieces together. The IBM data and GARG-AML research remain the work of their original creators.
 
@@ -40,17 +40,17 @@ Trailsight is the app in this repository that brings these pieces together. The 
 
 ```text
 IBM's artificial HI-Small transactions
-  -> a safe local database without IBM's hidden answers
+  ->a runtime-safe DuckDB with benchmark labels removed
   -> GARG-AML examines connections between accounts
-  -> Trailsight saves daily results and orders items for review
-  -> the app gathers the relevant facts for each investigation
-  -> an optional AI summary explains those supplied facts
+  -> Trailsight precomputes historical detector snapshots and orders items for review
+  -> the deterministic investigation domain resolves the relevant facts and supporting evidence for each investigation
+  -> an bounded MCP tools expose selected investigation context to the optional LLM
   -> the analyst reviews everything in the web interface
 ```
 
-The server, web interface, and optional AI feature use the same saved facts. Normal application code calculates the counts, dates, amounts, account connections, review bands, and transaction priorities. The AI does not invent these facts.
+The server, web interface, and optional AI feature use the same deterministic investigation domain. Deterministic Python code calculates the counts, dates, amounts, account connections, review bands, and transaction priorities. The AI does not invent these facts.
 
-Trailsight saves one set of account-pattern results for each day instead of recalculating them when a page opens. A past investigation therefore uses only information that was available by its stated date. The same prepared data and settings produce the same result.
+Trailsight saves one set of account-pattern results for each day instead of recalculating them when a page opens. A past investigation therefore uses only information that was available by its stated date. The same prepared data and settings produce deterministic/reproducible behavior.
 
 ### Key words used in the app
 
@@ -60,16 +60,8 @@ Trailsight saves one set of account-pattern results for each day instead of reca
 - **Transaction review priority:** a work-ordering label based on the saved review bands of the sender and receiver at that time.
 - **Network Pattern Alert:** a record created when an account enters, or re-enters, the HIGH review band.
 - **Detector cutoff:** the date and time when the GARG-AML result used on the page was calculated.
-- **Supporting records:** the limited facts and transaction examples supplied for an investigation.
+- **Supporting evidence:** the limited facts and transaction examples supplied for an investigation.
 - **AI assessment:** an optional written summary of supplied facts. It does not replace those facts or the analyst's judgment.
-
-## How Trailsight keeps IBM's test answers separate
-
-IBM provides an `Is Laundering` field and separate pattern labels for checking the pattern-finding results. Think of these labels as the answer sheet for a test. Trailsight removes them before building the database used by the app. The pattern calculation, server, web interface, AI prompt, AI tools, and run logs cannot read them.
-
-Only a separate test, run outside the app, may compare already-finished results with IBM's labels. In other words, Trailsight must produce its answer before it is allowed to look at IBM's answer.
-
-IBM provides artificial Bank IDs but not customer locations. Trailsight consistently assigns a country to each artificial bank so routes can be shown on a map. “Bank Country” describes the bank in this artificial display. It does **not** describe where a customer lives, their nationality, or the risk of a country.
 
 ## Product screenshots
 
@@ -123,7 +115,7 @@ IBM provides artificial Bank IDs but not customer locations. Trailsight consiste
 
 ![Trailsight Transaction Investigation facts and sender and receiver accounts](docs/assets/transaction-facts-and-endpoints.png)
 
-**Calculated investigation facts.** The app shows account bands, earlier amounts, previous interactions, recent transfer counts, and the currency route. Normal application code calculates these facts. They do not come from AI-generated text.
+**Deterministic investigation indicators.** The app shows account bands, earlier amounts, previous interactions, recent transfer counts, and the currency route. Normal application code calculates these facts. They do not come from AI-generated text.
 
 ![Trailsight Transaction Investigation sender and receiver accounts and calculated facts](docs/assets/transaction-endpoints-and-indicators.png)
 
@@ -135,7 +127,7 @@ IBM provides artificial Bank IDs but not customer locations. Trailsight consiste
 
 ![Trailsight Transaction Investigation supporting evidence](docs/assets/transaction-supporting-evidence.png)
 
-## What you need
+## Prerequisites
 
 The remaining sections are for people who want to run or inspect the project. You do not need them to understand the product overview above.
 
@@ -159,7 +151,7 @@ The included `.env.example` file contains no secret information. Put local file 
 
 ## Build the local database
 
-Run this when the local database does not exist. Replace the example source path with the location of your IBM `HI-Small_Trans.csv` file. This step removes IBM's hidden answer fields. It then creates a local database using DuckDB, the database program used by Trailsight:
+Run this when the local database does not exist. Replace the example source path with the location of your IBM `HI-Small_Trans.csv` file. This step removes IBM's hidden answer fields. It then creates a local database using DuckDB, the embedded analytical database used by Trailsight:
 
 ```bash
 uv run python scripts/v2_data_prepare.py \
@@ -167,7 +159,7 @@ uv run python scripts/v2_data_prepare.py \
   --output data/v2/runtime/trailsight_v2.duckdb
 ```
 
-Next, calculate and save the daily GARG-AML account results, Trailsight review bands, transaction priorities, and alerts:
+Next, calculate and save the historical GARG detector snapshots, Trailsight review bands, transaction priorities, and alerts:
 
 ```bash
 uv run python scripts/v2_detector_prepare.py \
@@ -220,15 +212,15 @@ The health page reports `ai_configured: true` when both `OPENAI_API_KEY` and `TR
 
 Select **Investigate with AI** on an Account or Transaction page to create a summary. After a successful summary, the analyst may ask one follow-up question about the same supplied facts. A technical failure does not use up that follow-up.
 
-For each AI run, the server writes one small technical log entry to `TRAILSIGHT_TRACE_PATH`. By default, this file is `data/traces/investigations-v2.jsonl`.
+For each AI run, the server writes one structured telemetry record to `TRAILSIGHT_TRACE_PATH`. By default, this file is `data/traces/investigations-v2.jsonl`.
 
-The log records the model and instructions used. It also records which limited app tools ran, timing, and AI input and output size. Finally, it records references to returned facts, whether required sections were present, and any error code.
+The log records the model and instructions used. It also records which bounded MCP tools ran, timing, and AI input and output size. Finally, it records references to returned facts, whether required sections were present, and any error code.
 
 The log does not store API keys, the conversation, private model reasoning, generated text, full supporting records, or IBM's hidden answers.
 
 Keep the OpenAI API key only in the server's `.env` file. Never place it in `frontend/.env*` or in code sent to the browser. See the [official OpenAI API documentation](https://developers.openai.com/api/docs/quickstart).
 
-## Check that the project works
+## Testing and evaluation
 
 Run the following checks:
 
@@ -242,11 +234,11 @@ npm run test:contracts
 npm run build
 ```
 
-The automated AI check does not connect to OpenAI, need an API key, or make a paid model call. It uses a fake AI service made only for tests. A person must separately check one summary from the real AI service.
+The automated AI check does not connect to OpenAI, need an API key, or make a paid model call. It uses a deterministic mocked model. A person must separately check one summary from the real AI service.
 
-## Important limits
+## POC scope and limitations
 
-- Trailsight is a local demonstration project designed to run as one server process. It is not a multi-server production system.
+- Trailsight is a local, single-process proof of concept designed to run as one server process. It is not a multi-server production system.
 - It has no sign-in system, user accounts, public hosting setup, or tools for managing a cloud service.
 - An alert moves from **Not reviewed** to **In review** to **Reviewed**. A reviewed alert cannot be moved backward.
 - GARG-AML review bands only help order an analyst's work. They are not probabilities and do not prove money laundering.
