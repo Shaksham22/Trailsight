@@ -58,6 +58,8 @@ The server, web interface, and optional AI feature use the same deterministic in
 
 Trailsight saves one set of account-pattern results for each day instead of recalculating them when a page opens. A past investigation therefore uses only information that was available by its stated date. The same prepared data and settings produce deterministic/reproducible behavior.
 
+On the full prepared IBM AMLworld HI-Small dataset — a roughly 3.6 GB DuckDB containing 5,078,345 transactions and about 515,000 total accounts, with about 385,000 GARG-AML-eligible accounts in the final snapshot — the Transaction List query time was reduced by roughly 10×, from ~0.8–1.3 seconds to ~80–90 ms. The original query performed the account, bank, review-state, and alert display joins before applying the pagination limit; the optimized query first selects the 51 transaction candidates needed for the page, then performs those more expensive joins only for those candidates, while preserving filtering and pagination behavior.
+
 ### Key words used in the app
 
 - **Account:** one Bank ID and Account ID from the artificial IBM data.
